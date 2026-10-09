@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تفسير القرآن بالقرآن</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Amiri+Quran&family=Noto+Naskh+Arabic:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <h1><a href="#1:1">تفسير القرآن بالقرآن</a></h1>
+    <nav class="controls">
+      <select id="surah" aria-label="السورة"></select>
+      <input id="ayah" type="number" min="1" value="1" aria-label="رقم الآية">
+      <form id="search-form" role="search">
+        <input id="search" type="search" placeholder="ابحث عن كلمة… أو جذر:رحم" aria-label="بحث">
+      </form>
+    </nav>
+  </header>
+
+  <main id="app">
+    <p class="loading">جارٍ تحميل البيانات…</p>
+  </main>
+
+  <footer class="foot">
+    الروابط بين الآيات محسوبة آليًا من نص القرآن وحده (الجذور، والعبارات المشتركة، والسياق)، وهي مساعدة على التدبّر لا تفسير قاطع.
+    · البيانات الصرفية: <a href="https://corpus.quran.com" target="_blank" rel="noopener">Quranic Arabic Corpus</a> (GPL)
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

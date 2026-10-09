@@ -1,0 +1,183 @@
+:root {
+  --bg: #faf7f0;
+  --surface: #ffffff;
+  --text: #1f2421;
+  --muted: #6b716c;
+  --border: #e4ddcc;
+  --accent: #1d6b4f;
+  --accent-soft: #e3f0ea;
+  --chip-context: #f6e7c8;
+  --chip-phrase: #e3ecf8;
+  --chip-roots: #ece6f6;
+  --highlight: #fff1b8;
+  --quran-font: "Amiri Quran", "Amiri", serif;
+  --ui-font: "Noto Naskh Arabic", "Segoe UI", Tahoma, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151816;
+    --surface: #1e2320;
+    --text: #e8eae6;
+    --muted: #9aa29c;
+    --border: #2f3632;
+    --accent: #6cc39d;
+    --accent-soft: #1f3a2f;
+    --chip-context: #4a3d1f;
+    --chip-phrase: #22334a;
+    --chip-roots: #352c48;
+    --highlight: #5a4c12;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #151816;
+  --surface: #1e2320;
+  --text: #e8eae6;
+  --muted: #9aa29c;
+  --border: #2f3632;
+  --accent: #6cc39d;
+  --accent-soft: #1f3a2f;
+  --chip-context: #4a3d1f;
+  --chip-phrase: #22334a;
+  --chip-roots: #352c48;
+  --highlight: #5a4c12;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--ui-font);
+  line-height: 1.7;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.top h1 { margin: 0; font-size: 1.25rem; }
+.top h1 a { color: var(--text); }
+
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.controls select,
+.controls input {
+  font: inherit;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+#ayah { width: 5.5em; }
+#search { width: 15em; max-width: 100%; }
+
+main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.loading, .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+
+.ref { color: var(--muted); font-size: 0.9rem; }
+
+.quran {
+  font-family: var(--quran-font);
+  font-size: 1.6rem;
+  line-height: 2.4;
+}
+
+.main-verse .quran { font-size: 2rem; }
+
+.word {
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0 2px;
+}
+.word:hover, .word:focus-visible { background: var(--accent-soft); outline: none; }
+.word.hit { background: var(--highlight); }
+
+.ayah-num {
+  display: inline-block;
+  font-family: var(--ui-font);
+  font-size: 0.85rem;
+  color: var(--accent);
+  margin: 0 4px;
+}
+
+.context { color: var(--muted); }
+.context .quran { font-size: 1.3rem; }
+
+.pager { display: flex; justify-content: space-between; margin: -4px 0 16px; }
+
+h2 { font-size: 1.1rem; margin: 24px 0 10px; }
+h2 small { color: var(--muted); font-weight: normal; font-size: 0.85rem; }
+
+.related { cursor: pointer; transition: border-color 0.15s; }
+.related:hover { border-color: var(--accent); }
+
+.related-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.bar {
+  flex: 0 0 90px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.bar span { display: block; height: 100%; background: var(--accent); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chip {
+  font-size: 0.85rem;
+  border-radius: 999px;
+  padding: 1px 10px;
+}
+.chip.context { background: var(--chip-context); }
+.chip.phrase { background: var(--chip-phrase); }
+.chip.phrase .q { font-family: var(--quran-font); }
+.chip.roots { background: var(--chip-roots); }
+
+.foot {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 16px 16px 32px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 600px) {
+  .quran { font-size: 1.35rem; }
+  .main-verse .quran { font-size: 1.6rem; }
+  #search { width: 100%; }
+  .controls, #search-form { width: 100%; }
+}
