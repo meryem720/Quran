@@ -4,6 +4,7 @@
 اعتمادًا على مؤشرات من داخل القرآن فقط:
   1. الجذور واللمّات المشتركة (TF-IDF + تشابه جيب التمام)
   2. العبارات المتطابقة (n-grams بعد حذف التشكيل)
+  3. التعبير المشترك بصيغ مختلفة (أزواج اللمّات المتقاربة)
   4. السياق والبيان الداخلي (قواعد على النص)
 
 الاستعمال:
@@ -23,12 +24,14 @@ MORPH_FILE = os.path.join(ROOT_DIR, "data", "quran-morphology.txt")
 OUT_DIR = os.path.join(ROOT_DIR, "web", "data")
 
 TOP_K = 10
-WEIGHTS = {"roots": 1.0, "phrase": 1.0, "context": 2.0}
+WEIGHTS = {"roots": 1.0, "phrase": 1.0, "expression": 1.0, "context": 2.0}
 # الخصائص الشائعة جدًا (مثل «قول» و«الله») لا تميّز بين الآيات
 MAX_FEATURE_DF = 400
 MAX_NGRAM_DF = 40
 NGRAM_SIZES = (2, 3, 4)
 MIN_ROOT_SCORE = 0.08
+# أقصى مسافة بين كلمتي التعبير: ﴿أنعمتَ عليهم﴾ و﴿أنعم اللهُ عليهم﴾
+EXPRESSION_GAP = 2
 
 SURAH_NAMES = [
     "الفاتحة", "البقرة", "آل عمران", "النساء", "المائدة", "الأنعام", "الأعراف",
@@ -192,12 +195,66 @@ def phrase_similarity(verses):
     return scores, best_phrase
 
 
+# ---------- المؤشر 3: التعبير المشترك بصيغ مختلفة ----------
+
+def _lemma(word):
+    return normalize(word["lemma"] or word["text"])
+
+
+def expression_similarity(verses):
+    """يطابق أزواج اللمّات المتقاربة بدل الحروف، فيجد التعبير نفسه بصيغ مختلفة.
+
+    مثال: ﴿أَنْعَمْتَ عَلَيْهِمْ﴾ (الفاتحة 7) و﴿أَنْعَمَ ٱللَّهُ عَلَيْهِم﴾ (النساء 69)
+    فيهما الزوج (أنعم، على) رغم اختلاف الصيغة وكلمة بينهما.
+    """
+    n = len(verses)
+    pairs = []
+    index = defaultdict(set)
+    for i, v in enumerate(verses):
+        ws = v["words"]
+        found = {}
+        for a in range(len(ws)):
+            for b in range(a + 1, min(len(ws), a + EXPRESSION_GAP + 1)):
+                if ws[a]["root"] or ws[b]["root"]:
+                    found.setdefault((_lemma(ws[a]), _lemma(ws[b])), (a, b))
+        pairs.append(found)
+        for key in found:
+            index[key].add(i)
+
+    scores = []
+    best_expr = []
+    for i, found in enumerate(pairs):
+        acc = defaultdict(float)
+        best = {}
+        for key, (a, b) in found.items():
+            ids = index[key]
+            if len(ids) > MAX_NGRAM_DF:
+                continue
+            weight = math.log(n / len(ids))
+            for j in ids:
+                if j == i:
+                    continue
+                acc[j] += weight
+                if j not in best or best[j][0] < weight:
+                    best[j] = (weight, a, b)
+        words = verses[i]["words"]
+        scores.append({j: x / (x + 20.0) for j, x in acc.items()})
+        best_expr.append({
+            j: words[a]["text"] + (" " if b == a + 1 else " … ") + words[b]["text"]
+            for j, (_, a, b) in best.items()
+        })
+    return scores, best_expr
+
+
 # ---------- المؤشر 4: السياق والبيان الداخلي ----------
 
 _ADRAKA = re.compile(r"(وما|ثمما)ادريك")
+_QUESTION = re.compile(r"هل(اتيك|انبيكم|ننبيكم|ادلكم)")
+QUESTION_MAX_WORDS = 12
 # رموز أسباب السياق (تُعرض نصوصها في الواجهة)
 CONTEXT_ADRAKA = 1    # جواب ﴿وما أدراك﴾
 CONTEXT_RELATIVE = 2  # صفة متصلة بالآية السابقة
+CONTEXT_QUESTION = 3  # جواب ﴿هل أتاك / هل أنبئكم / هل أدلكم﴾
 _RELATIVE_START = ("الذين", "الذي", "التي", "اللذين")
 
 
@@ -206,6 +263,8 @@ def context_links(verses):
 
     - ﴿وما أدراك ما ...﴾ يُجاب عنها في الآية التالية التي ليس فيها «أدراك».
     - الآية التي تبدأ بـ«الذين/الذي» تصف كلمة في آخر الآية السابقة.
+    - ﴿هل أتاك حديث…﴾ و﴿هل أنبئكم…﴾ و﴿هل أدلكم…﴾ في آية قصيرة يُجاب عنها
+      في الآية التالية (في الآية الطويلة يأتي الجواب غالبًا في الآية نفسها).
     """
     pos = {(v["s"], v["a"]): i for i, v in enumerate(verses)}
     links = defaultdict(dict)  # i -> {j: reason}
@@ -225,6 +284,9 @@ def context_links(verses):
                     add(i, j, CONTEXT_ADRAKA)
                     break
                 k += 1
+        if (_QUESTION.search(flat) and len(v["words"]) <= QUESTION_MAX_WORDS
+                and (v["s"], v["a"] + 1) in pos):
+            add(i, pos[(v["s"], v["a"] + 1)], CONTEXT_QUESTION)
         first = normalize(v["words"][0]["text"]) if v["words"] else ""
         if first in _RELATIVE_START and (v["s"], v["a"] - 1) in pos:
             add(pos[(v["s"], v["a"] - 1)], i, CONTEXT_RELATIVE)
@@ -243,26 +305,30 @@ def shared_roots(vi, vj, idf, limit=3):
 def build_related(verses):
     roots, idf = root_similarity(verses)
     phrases, best_phrase = phrase_similarity(verses)
+    expressions, best_expr = expression_similarity(verses)
     context = context_links(verses)
 
     related = {}
     for i, v in enumerate(verses):
-        candidates = set(roots[i]) | set(phrases[i]) | set(context.get(i, {}))
+        candidates = set(roots[i]) | set(phrases[i]) | set(expressions[i]) | set(context.get(i, {}))
         ranked = []
         for j in candidates:
             r = roots[i].get(j, 0.0)
             p = phrases[i].get(j, 0.0)
+            # التعبير يُحسب فقط إذا لم تتطابق العبارة حرفيًا، حتى لا يُعدّ الشيء مرتين
+            e = expressions[i].get(j, 0.0) if p == 0 else 0.0
             c = 1.0 if j in context.get(i, {}) else 0.0
-            if r < MIN_ROOT_SCORE and p == 0 and c == 0:
+            if r < MIN_ROOT_SCORE and p == 0 and e == 0 and c == 0:
                 continue
-            score = WEIGHTS["roots"] * r + WEIGHTS["phrase"] * p + WEIGHTS["context"] * c
-            ranked.append((score, j, r, p, c))
+            score = (WEIGHTS["roots"] * r + WEIGHTS["phrase"] * p
+                     + WEIGHTS["expression"] * e + WEIGHTS["context"] * c)
+            ranked.append((score, j, r, p, e, c))
         ranked.sort(key=lambda t: (-t[0], t[1]))
 
         # صيغة مختصرة لتصغير الملف:
-        # [سورة، آية، الدرجة×100، رمز السياق، العبارة المشتركة، الجذور المشتركة]
+        # [سورة، آية، الدرجة×100، رمز السياق، العبارة المشتركة، الجذور المشتركة، التعبير المشترك]
         items = []
-        for score, j, r, p, c in ranked[:TOP_K]:
+        for score, j, r, p, e, c in ranked[:TOP_K]:
             u = verses[j]
             roots_list = shared_roots(v, u, idf) if r >= MIN_ROOT_SCORE else []
             items.append([
@@ -272,6 +338,7 @@ def build_related(verses):
                 context[i][j] if c else 0,
                 best_phrase[i][j] if p else "",
                 " ".join(roots_list),
+                best_expr[i][j] if e else "",
             ])
         related[f"{v['s']}:{v['a']}"] = items
     return related

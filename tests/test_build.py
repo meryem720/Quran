@@ -40,6 +40,14 @@ class PipelineTest(unittest.TestCase):
         # ﴿هدى للمتقين﴾ ← ﴿الذين يؤمنون بالغيب﴾
         self.assertEqual(links[i[(2, 2)]][i[(2, 3)]], build.CONTEXT_RELATIVE)
 
+        # ﴿هل أتاك حديث الجنود﴾ ← ﴿فرعون وثمود﴾
+        self.assertEqual(links[i[(85, 17)]][i[(85, 18)]], build.CONTEXT_QUESTION)
+
+    def test_expression_matches_different_forms(self):
+        scores, _ = build.expression_similarity(self.verses)
+        # ﴿أنعمتَ عليهم﴾ و﴿أنعم اللهُ عليهم﴾
+        self.assertGreater(scores[self.index[(1, 7)]].get(self.index[(4, 69)], 0), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
