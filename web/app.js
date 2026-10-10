@@ -23,6 +23,9 @@ const state = {
   normWords: [],  // [[s, a, [كلمات موحّدة], [لمّات موحّدة]], ...]
   topicIndex: null, // فهرس الموضوعات (web/topic.js)
   topicMore: null,  // دالة «عرض المزيد» في صفحة الموضوع
+  topicViews: new Map(), // عنوان صفحة الموضوع -> {عدد المعروض، موضع القراءة}
+  verseIndex: new Map(), // "s:a" -> رقم الآية في فهرس الموضوعات
+  lastScrollY: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -48,7 +51,8 @@ function verseHtml(s, a, { clickable = false, highlightRoot = null, highlightWor
   const parts = words.map(([text, root, lemma]) => {
     const hit = (highlightRoot && root === highlightRoot) ||
       (highlightLemmas && highlightLemmas.has(lemma)) ||
-      (highlightWord && (normalize(text).includes(highlightWord) || normalize(lemma) === highlightWord));
+      (highlightWord && (normalize(text).includes(highlightWord) || normalize(lemma) === highlightWord
+        || T.spellingKey(text).includes(T.searchKey(highlightWord))));
     const cls = "word" + (hit ? " hit" : "");
     if (clickable && root) {
       return `<span class="${cls}" tabindex="0" role="link" data-root="${escapeHtml(root)}" title="الجذر: ${escapeHtml(root)}">${escapeHtml(text)}</span>`;
@@ -144,8 +148,11 @@ function renderSearch(query) {
   if (!q) return renderVerse(1, 1);
   // «الرحمن» تُكتب «للرحمن» بعد اللام، فنقارن أيضًا باللمّة دون «ال»
   const bare = q.startsWith("ال") && q.length > 3 ? q.slice(2) : q;
+  // وبالإملاء الحديث: «الصابرين» تطابق ﴿ٱلصَّٰبِرِينَ﴾
+  const qs = T.searchKey(query);
   const matches = state.normWords
-    .filter(([, , words, lemmas]) => words.some((w) => w.includes(q)) || lemmas.includes(q) || lemmas.includes(bare))
+    .filter(([, , words, lemmas, spelled]) => words.some((w) => w.includes(q)) || lemmas.includes(q) || lemmas.includes(bare)
+      || spelled.some((w) => w.includes(qs)))
     .map(([s, a]) => [s, a]);
   renderList(`نتائج البحث عن «${escapeHtml(query)}»`, matches, { highlightWord: q });
   document.title = `بحث: ${query} · تفسير القرآن بالقرآن`;
@@ -153,8 +160,13 @@ function renderSearch(query) {
 
 // ---------- الموضوعات ----------
 
-function topicHash(query, lemmas) {
-  return "#topic/" + encodeURIComponent(query + (lemmas ? "|" + lemmas.join(",") : ""));
+// عنوان صفحة الموضوع: #topic/<السؤال>[|<لمّات مختارة أو *>[|ctx]]
+// (* = الاختيار التلقائي، والخانة الفارغة = لا شيء مختار)
+function topicHash(query, lemmas = null, withContext = false) {
+  let s = query;
+  if (lemmas || withContext) s += "|" + (lemmas ? lemmas.join(",") : "*");
+  if (withContext) s += "|ctx";
+  return "#topic/" + encodeURIComponent(s);
 }
 
 function ayahLink(i) {
@@ -166,7 +178,7 @@ function renderTopics() {
   app.innerHTML = `
     <section class="card">
       <h2>البحث بالموضوع</h2>
-      <p>اكتب موضوعًا في خانة البحث (مثل: الصلاة، الصبر، موسى) فتظهر كل الآيات التي ورد فيها،
+      <p>يُكتب الموضوع في خانة البحث (مثل: الصلاة، الصبر، موسى، يوم القيامة) فتظهر كل الآيات التي ورد فيها،
         ومع كل آية الآيات التي تبيّنها من القرآن، وفي الأخير خلاصة الموضوع مستخرجة من ألفاظ الآيات نفسها.</p>
       <div class="topics-grid">
         ${SUGGESTED_TOPICS.map((t) => `<a class="topic-link" href="${topicHash(t)}">${t}</a>`).join("")}
@@ -175,87 +187,138 @@ function renderTopics() {
   document.title = "الموضوعات · تفسير القرآن بالقرآن";
 }
 
-// خانات اختيار الكلمات: المختارة، والمعاني الأخرى للصيغة، وكلمات الجذر نفسه
-function lemmaChips(query, selected, options) {
+// أول موضع للّمّة في المصحف: «مثال: البقرة 43 ﴿ٱلزَّكَوٰةَ﴾» يميّز «حاجَّ» (جادل) من «حاجّ» (الحاجّ)
+function lemmaExample(key) {
+  const idx = state.topicIndex;
+  const i = idx.lemmas.get(key).verses[0];
+  const v = idx.verses[i];
+  const word = v.words.find((w) => w[2] === key);
+  return `${refLabel(v.s, v.a)} ﴿${word ? word[0] : ""}﴾`;
+}
+
+const CHIP_KINDS = { main: "", alt: "معنى آخر للكتابة نفسها", sibling: "من الجذر نفسه" };
+
+// خانات اختيار الكلمات: ترتيبها ثابت (المختارة تلقائيًا، ثم المعاني الأخرى، ثم الجذر)
+function lemmaChips(query, selected, options, withContext) {
   const idx = state.topicIndex;
   return options.map(({ key, kind }) => {
     const on = selected.includes(key);
     const next = on ? selected.filter((k) => k !== key) : selected.concat(key);
     const info = idx.lemmas.get(key);
-    const title = kind === "alt" ? "معنى آخر للصيغة نفسها" : kind === "sibling" ? "من الجذر نفسه" : "";
-    return `<a class="lemma-chip${on ? " on" : ""}" href="${topicHash(query, next)}" title="${title}" aria-pressed="${on}">
+    const title = [CHIP_KINDS[kind], `مثال: ${lemmaExample(key)}`].filter(Boolean).join(" — ");
+    return `<a class="lemma-chip${on ? " on" : ""}" href="${topicHash(query, next, withContext)}"
+      title="${escapeHtml(title)}" aria-label="${escapeHtml(info.display)}${on ? " (مختارة)" : ""}">
       ${on ? "✓ " : "+ "}${escapeHtml(info.display)} <small>${info.verses.length}</small></a>`;
   }).join("");
 }
 
+function verseIndexOf(s, a) {
+  return state.verseIndex.get(`${s}:${a}`);
+}
+
+// بيان الآية من القرآن: الآيات المرتبطة بها، ويُقدَّم منها ما كان من آيات الموضوع نفسه
+function explanationItems(v, topicSet) {
+  const items = state.related[`${v.s}:${v.a}`] || [];
+  const inTopic = items.filter((it) => topicSet.has(verseIndexOf(it[0], it[1])));
+  const others = items.filter((it) => !inTopic.includes(it));
+  return [...inTopic, ...others].slice(0, 3).map((it) => ({ item: it, inTopic: inTopic.includes(it) }));
+}
+
 function renderTopic(arg) {
   const idx = state.topicIndex;
-  const [query, selRaw] = arg.split("|");
+  const [rawQuery, selRaw, flag] = arg.split("|");
+  const query = rawQuery.trim();
+  const withContext = flag === "ctx";
   const resolved = T.resolveQuery(idx, query);
-  const selected = selRaw !== undefined
-    ? selRaw.split(",").filter((k) => idx.lemmas.has(k))
-    : resolved.selected;
+  const phrase = resolved.phrase;
+  const selected = phrase || selRaw === undefined || selRaw === "*"
+    ? resolved.selected
+    : selRaw.split(",").filter((k) => idx.lemmas.has(k));
 
   const options = [];
   const seen = new Set();
   const addOption = (key, kind) => { if (!seen.has(key)) { seen.add(key); options.push({ key, kind }); } };
-  resolved.selected.forEach((k) => addOption(k, "main"));
-  selected.forEach((k) => addOption(k, "main"));
-  resolved.alternatives.forEach((k) => addOption(k, "alt"));
-  resolved.siblings.forEach((k) => addOption(k, "sibling"));
+  if (!phrase) {
+    resolved.selected.forEach((k) => addOption(k, "main"));
+    resolved.alternatives.forEach((k) => addOption(k, "alt"));
+    resolved.siblings.forEach((k) => addOption(k, "sibling"));
+    selected.forEach((k) => addOption(k, "main")); // لمّات من العنوان ليست في القوائم
+  }
 
   document.title = `${query} · تفسير القرآن بالقرآن`;
   const wordSearch = `<a href="#search/${encodeURIComponent(query)}">البحث الحرفي عن «${escapeHtml(query)}»</a>`;
 
-  if (!options.length) {
+  if (!phrase && !options.length) {
     const sugg = resolved.suggestions.map((k) => {
       const info = idx.lemmas.get(k);
-      return `<a class="topic-link" href="${topicHash(info.display)}">${escapeHtml(info.display)} <small>${info.verses.length}</small></a>`;
+      return `<a class="topic-link" href="${topicHash(T.plain(info.display), [k])}">${escapeHtml(info.display)} <small>${info.verses.length}</small></a>`;
     }).join("");
+    const missing = resolved.missing.length
+      ? `<p>لم تُفهم من العبارة: ${resolved.missing.map((w) => `«${escapeHtml(w)}»`).join("، ")}.</p>` : "";
     app.innerHTML = `
       <section class="card">
         <h2>لم يُعثر على موضوع «${escapeHtml(query)}»</h2>
+        ${missing}
         ${sugg ? `<p>كلمات قريبة:</p><div class="topics-grid">${sugg}</div>` : ""}
         <p>${wordSearch} · <a href="#topics">الموضوعات المقترحة</a></p>
       </section>`;
     return;
   }
 
-  const chipsHtml = `
-    <div class="lemma-chips">${lemmaChips(query, selected, options)}</div>
-    <p class="hint">الكلمات المعلَّمة ✓ هي التي تُجمع آياتها. يمكن إضافة كلمات أخرى من الجذر نفسه أو حذفها.
-      · ${wordSearch}</p>`;
+  const chipsHtml = phrase
+    ? `<p class="hint">عبارة: الآيات التي تتتابع فيها ${phrase.map((keys) =>
+        `«${escapeHtml(T.plain(idx.lemmas.get(keys[0]).display))}»`).join(" ثم ")}. · ${wordSearch}</p>`
+    : `<div class="lemma-chips">${lemmaChips(query, selected, options, withContext)}</div>
+      <p class="hint">الكلمات المعلَّمة ✓ هي التي تُجمع آياتها، ويمكن إضافة غيرها أو حذفها
+        (يظهر مثال لكل كلمة عند الوقوف عليها بالمؤشر). · ${wordSearch}</p>`;
 
   if (!selected.length) {
     app.innerHTML = `<section class="card"><h2>موضوع: ${escapeHtml(query)}</h2>${chipsHtml}
-      <p class="empty">اختر كلمة واحدة على الأقل.</p></section>`;
+      <p class="empty">يلزم اختيار كلمة واحدة على الأقل.</p></section>`;
     return;
   }
 
-  const sum = T.summarize(idx, selected);
+  const sum = T.summarize(idx, selected, phrase ? T.phraseVerses(idx, phrase) : undefined);
+  if (!sum.verses.length) {
+    app.innerHTML = `<section class="card"><h2>موضوع: ${escapeHtml(query)}</h2>${chipsHtml}
+      <p class="empty">لا توجد آيات تتتابع فيها هذه الكلمات.</p></section>`;
+    return;
+  }
   const lemmaSet = new Set(selected);
+  const topicSet = new Set(sum.verses);
   const axisOf = new Map();
-  (sum.axes.list || []).forEach((ax) => ax.verses.forEach((i) => axisOf.set(i, ax.labels.join("، "))));
+  sum.axes.list.forEach((ax) => ax.verses.forEach((i) => axisOf.set(i, ax.labels.join("، "))));
+
+  // آيات السياق: ما بين موضعين متقاربين من سورة واحدة (القصة بين ذكر صاحبها)
+  const context = phrase ? [] : T.contextVerses(idx, sum.verses);
+  const contextSet = new Set(withContext ? context : []);
+  const list = withContext ? [...sum.verses, ...context].sort((x, y) => x - y) : sum.verses;
+  const contextLink = context.length
+    ? `<a href="${topicHash(query, selRaw === undefined || selRaw === "*" ? null : selected, !withContext)}">${withContext
+      ? "إخفاء آيات السياق"
+      : `إظهار آيات السياق بين مواضعه (${context.length})`}</a> · ` : "";
 
   const verseCard = (i) => {
     const v = idx.verses[i];
-    const related = (state.related[`${v.s}:${v.a}`] || []).slice(0, 3);
+    const explain = explanationItems(v, topicSet);
     const axis = axisOf.get(i);
+    const isContext = contextSet.has(i);
     return `
-      <article class="card topic-verse">
+      <article class="card topic-verse${isContext ? " context-verse" : ""}" tabindex="-1">
         <div class="related-head">
           <a class="ref" href="#${v.s}:${v.a}">${refLabel(v.s, v.a)}</a>
+          ${isContext ? `<span class="chip">من السياق</span>` : ""}
           ${axis ? `<span class="chip axis">المحور: ${escapeHtml(axis)}</span>` : ""}
         </div>
         ${verseHtml(v.s, v.a, { highlightLemmas: lemmaSet })}
-        ${related.length ? `
+        ${explain.length ? `
         <details class="explain">
-          <summary>بيانها من القرآن (${related.length})</summary>
-          ${related.map((item) => `
+          <summary>بيانها من القرآن (${explain.length})</summary>
+          ${explain.map(({ item, inTopic }) => `
             <div class="explain-item">
               <a class="ref" href="#${item[0]}:${item[1]}">${refLabel(item[0], item[1])}</a>
-              ${verseHtml(item[0], item[1])}
-              <div class="chips">${reasonChips(item)}</div>
+              ${verseHtml(item[0], item[1], { highlightLemmas: lemmaSet })}
+              <div class="chips">${inTopic ? `<span class="chip in-topic">من آيات الموضوع</span>` : ""}${reasonChips(item)}</div>
             </div>`).join("")}
         </details>` : ""}
       </article>`;
@@ -263,9 +326,9 @@ function renderTopic(arg) {
 
   app.innerHTML = `
     <section class="card topic-head">
-      <h2>موضوع: ${escapeHtml(query)} <small>${T.countAr(sum.verses.length, "ayah")}</small></h2>
+      <h2>موضوع: ${escapeHtml(query)} <small>عدد الآيات: ${sum.verses.length}</small></h2>
       ${chipsHtml}
-      <p><a href="#" data-scroll="summary">الانتقال إلى الخلاصة ↓</a></p>
+      <p>${contextLink}<a href="#summary" data-scroll="summary">الانتقال إلى الخلاصة ↓</a></p>
     </section>
     <div id="topic-verses"></div>
     <div id="topic-more"></div>
@@ -273,16 +336,24 @@ function renderTopic(arg) {
   `;
 
   let shown = 0;
-  state.topicMore = () => {
-    const next = sum.verses.slice(shown, shown + TOPIC_PAGE);
-    $("topic-verses").insertAdjacentHTML("beforeend", next.map(verseCard).join(""));
+  const viewKey = location.hash;
+  state.topicMore = (focusNew) => {
+    const next = list.slice(shown, shown + TOPIC_PAGE);
+    const container = $("topic-verses");
+    container.insertAdjacentHTML("beforeend", next.map(verseCard).join(""));
+    // بعد «عرض المزيد» ينتقل التركيز إلى أول آية جديدة بدل أن يضيع
+    if (focusNew && container.children && container.children[shown]) container.children[shown].focus();
     shown += next.length;
-    const left = sum.verses.length - shown;
-    $("topic-more").innerHTML = left > 0
-      ? `<button class="more" data-more>عرض المزيد (${T.countAr(left, "ayah").replace(/^في /, "")} باقية)</button>`
-      : "";
+    state.topicViews.set(viewKey, { shown, y: (state.topicViews.get(viewKey) || {}).y || 0 });
+    const left = list.length - shown;
+    $("topic-more").innerHTML = left > 0 ? `<button class="more" data-more>عرض المزيد (بقي ${left})</button>` : "";
   };
-  state.topicMore();
+
+  // الرجوع من آية إلى الموضوع يعيد ما عُرض وموضع القراءة
+  const saved = state.topicViews.get(viewKey);
+  state.topicMore(false);
+  while (saved && shown < saved.shown && shown < list.length) state.topicMore(false);
+  if (saved && saved.y) setTimeout(() => window.scrollTo(0, saved.y), 0);
 }
 
 // الخلاصة: كلها من ألفاظ الآيات (إحصاء وتجميع)، لا تفسير خارجي
@@ -296,35 +367,39 @@ function summaryHtml(sum) {
     phrase: (text) => `﴿<span class="q">${escapeHtml(text)}</span>﴾`,
   });
 
+  // كل لفظ مقترن يفتح موضوعه بلمّته نفسها (فلا تختلط «آتى» بـ«أتى»)
   const cooccurHtml = sum.cooccur.map((c) =>
-    `<a class="topic-link" href="${topicHash(c.display)}" title="مثال: ${refLabel(idx.verses[c.example].s, idx.verses[c.example].a)}">
-      ${escapeHtml(c.display)} <small>${c.count}</small></a>`).join("");
+    `<a class="topic-link" href="${topicHash(T.plain(c.display), [c.key])}" title="مثال: ${escapeHtml(lemmaExample(c.key))}">
+      ${escapeHtml(T.plain(c.display))} <small>${c.count}</small></a>`).join("");
 
   const formulasHtml = sum.formulas.map((f) =>
-    `<li>﴿<span class="q">${escapeHtml(f.text)}</span>﴾ — ${T.countAr(f.count, "times")}، مثل ${ayahLink(f.example)}</li>`).join("");
+    `<li>﴿<span class="q">${escapeHtml(f.text)}</span>﴾ — في ${T.countAr(f.count, "ayah")}، مثل ${ayahLink(f.example)}</li>`).join("");
 
-  const axesHtml = sum.axes.skipped
-    ? `<p class="hint">الموضوع واسع (${T.countAr(sum.verses.length, "ayah")})، فلم تُحسب محاوره. يمكن اختيار كلمة أدق.</p>`
-    : sum.axes.list.map((ax) => `
+  let axesHtml = "";
+  if (sum.axes.skipped) {
+    axesHtml = `<p class="hint">الموضوع واسع (عدد آياته ${sum.verses.length})، فلم تُحسب محاوره. يمكن اختيار كلمة أدق.</p>`;
+  } else if (sum.axes.list.length) {
+    axesHtml = sum.axes.list.map((ax) => `
       <div class="axis-block">
-        <h4>${escapeHtml(ax.labels.join("، "))} <small>${T.countAr(ax.verses.length, "ayah")}</small></h4>
+        <h4>${escapeHtml(ax.labels.join("، "))} <small>(${ax.verses.length})</small></h4>
         <div class="quote">${quote(ax.representative)}</div>
         <p class="refs">${ax.verses.map(ayahLink).join("، ")}</p>
       </div>`).join("") +
-      (sum.axes.rest ? `<p class="hint">و${T.countAr(sum.axes.rest, "ayah")} لا تشترك في ألفاظها مع غيرها بما يكفي لتكوين محور.</p>` : "");
+      (sum.axes.rest ? `<p class="hint">عدد الآيات التي لم تدخل في محور: ${sum.axes.rest}.</p>` : "");
+  }
 
   const centralHtml = sum.central.map((i) => `<div class="quote">${quote(i)}</div>`).join("");
   const surahsHtml = sum.surahs.slice(0, 12).map((x) =>
     `<span class="chip roots">${x.name} ${x.count}</span>`).join("");
 
   return `
-    <section id="summary" class="card summary">
+    <section id="summary" class="card summary" tabindex="-1">
       <h2>الخلاصة</h2>
       <p class="summary-text">${sentences.join(" ")}</p>
       ${cooccurHtml ? `<h3>ما يقترن به في القرآن</h3><div class="topics-grid">${cooccurHtml}</div>` : ""}
       ${formulasHtml ? `<h3>الصيغ المتكررة</h3><ul class="formulas">${formulasHtml}</ul>` : ""}
       ${axesHtml ? `<h3>محاور الموضوع</h3>${axesHtml}` : ""}
-      ${centralHtml ? `<h3>أجمع الآيات</h3><p class="hint">الآيات التي تجمع أكثر ما يقترن بالموضوع من ألفاظ.</p>${centralHtml}` : ""}
+      ${centralHtml ? `<h3>أجمع الآيات</h3><p class="hint">الآيات التي تجمع أكثر ما يقترن بالموضوع من ألفاظ، نسبةً إلى طولها.</p>${centralHtml}` : ""}
       <h3>توزّعه على السور</h3><div class="chips">${surahsHtml}</div>
       <p class="hint note">هذه الخلاصة مستخرجة آليًا من ألفاظ الآيات نفسها (ما يتكرر معها، وما يتشابه منها)،
         وليست تفسيرًا من خارج القرآن.</p>
@@ -334,7 +409,12 @@ function summaryHtml(sum) {
 // ---------- التنقل ----------
 
 function route() {
-  const hash = decodeURIComponent(location.hash.slice(1));
+  let hash = location.hash.slice(1);
+  try {
+    hash = decodeURIComponent(hash);
+  } catch (e) {
+    // «%» غير مرمّزة في العنوان: نستعمله كما هو
+  }
   window.scrollTo(0, 0);
   if (hash.startsWith("root/")) return renderRoot(hash.slice(5));
   if (hash.startsWith("search/")) return renderSearch(hash.slice(7));
@@ -358,17 +438,23 @@ function setupControls() {
   });
   $("search-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    const q = $("search").value.trim();
+    const q = $("search").value.replace(/[|,%#]/g, " ").trim();
     if (!q) return;
     const root = q.match(/^جذر\s*[:：]\s*(.+)$/);
-    location.hash = root ? `root/${root[1].replace(/\s+/g, "")}` : topicHash(q.replace(/[|,]/g, " ").trim());
+    location.hash = root ? `root/${root[1].replace(/\s+/g, "")}` : topicHash(q);
   });
 
   // النقر على كلمة يفتح مواضع جذرها، والنقر على بطاقة يفتح الآية
   const activate = (e) => {
-    if (e.target.closest("[data-more]")) { if (state.topicMore) state.topicMore(); return; }
+    if (e.target.closest("[data-more]")) { if (state.topicMore) state.topicMore(true); return; }
     const scroll = e.target.closest("[data-scroll]");
-    if (scroll) { e.preventDefault(); $(scroll.dataset.scroll).scrollIntoView({ behavior: "smooth" }); return; }
+    if (scroll) {
+      e.preventDefault();
+      const target = $(scroll.dataset.scroll);
+      target.scrollIntoView({ behavior: "smooth" });
+      target.focus({ preventScroll: true });
+      return;
+    }
     const word = e.target.closest("[data-root]");
     if (word) { location.hash = `root/${word.dataset.root}`; return; }
     if (e.target.closest("a")) return;
@@ -377,7 +463,16 @@ function setupControls() {
   };
   app.addEventListener("click", activate);
   app.addEventListener("keydown", (e) => { if (e.key === "Enter") activate(e); });
-  window.addEventListener("hashchange", route);
+
+  // نحفظ موضع القراءة في صفحة الموضوع قبل مغادرتها
+  try { history.scrollRestoration = "manual"; } catch (e) { /* متصفح قديم */ }
+  window.addEventListener("hashchange", (e) => {
+    const old = e.oldURL ? e.oldURL.slice(e.oldURL.indexOf("#") >= 0 ? e.oldURL.indexOf("#") : e.oldURL.length) : "";
+    const view = state.topicViews.get(old);
+    if (view) view.y = state.lastScrollY;
+    route();
+  });
+  window.addEventListener("scroll", () => { state.lastScrollY = window.scrollY; }, { passive: true });
 }
 
 function buildIndexes() {
@@ -389,7 +484,8 @@ function buildIndexes() {
         if (!state.rootIndex.has(r)) state.rootIndex.set(r, []);
         state.rootIndex.get(r).push([s, a]);
       });
-      state.normWords.push([s, a, words.map((w) => normalize(w[0])), words.map((w) => normalize(w[2]))]);
+      state.normWords.push([s, a, words.map((w) => normalize(w[0])), words.map((w) => normalize(w[2])),
+        words.map((w) => T.spellingKey(w[0]))]);
     });
   });
 }
@@ -402,7 +498,8 @@ async function init() {
     ]);
     state.surahs = quran.surahs;
     state.related = related;
-    state.topicIndex = T.buildIndex(quran.surahs);
+    state.topicIndex = T.buildIndex(quran);
+    state.topicIndex.verses.forEach((v, i) => state.verseIndex.set(`${v.s}:${v.a}`, i));
     buildIndexes();
     setupControls();
     route();

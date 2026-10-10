@@ -162,7 +162,9 @@ h2 small { color: var(--muted); font-weight: normal; font-size: 0.85rem; }
   border-radius: 999px;
   padding: 1px 10px;
 }
-.chip.context { background: var(--chip-context); }
+.chip.context { background: var(--chip-context); color: var(--text); }
+.chip a { color: inherit; text-decoration: underline; }
+.chip.in-topic { background: var(--accent-soft); color: var(--text); }
 .chip.phrase { background: var(--chip-phrase); }
 .chip .q { font-family: var(--quran-font); }
 .chip.roots { background: var(--chip-roots); }
@@ -214,7 +216,10 @@ button.more {
   cursor: pointer;
 }
 
-.summary { border-color: var(--accent); }
+.summary { border-color: var(--accent); scroll-margin-top: 90px; }
+.summary:focus { outline: none; }
+.topic-verse:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.context-verse { border-style: dashed; }
 .summary h2 { margin-top: 0; }
 .summary h3 { font-size: 1rem; margin: 18px 0 6px; color: var(--accent); }
 .summary h4 { margin: 0 0 4px; font-family: var(--quran-font); font-size: 1.1rem; font-weight: normal; }

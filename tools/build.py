@@ -74,12 +74,12 @@ def parse_morphology(path):
             line = line.rstrip("\n")
             if not line:
                 continue
-            loc, form, _pos, tags = line.split("\t")
+            loc, form, pos_tag, tags = line.split("\t")
             s, a, w, _seg = (int(x) for x in loc.split(":"))
             if "INTG" in tags.split("|"):
                 questions.add((s, a))
             words = verses.setdefault((s, a), {})
-            word = words.setdefault(w, {"text": "", "root": None, "lemma": None, "name": False})
+            word = words.setdefault(w, {"text": "", "root": None, "lemma": None, "name": False, "verb": False})
             word["text"] += form
             parts = tags.split("|")
             if "PN" in parts:
@@ -89,6 +89,7 @@ def parse_morphology(path):
             if root:
                 # الجزء الذي يحمل الجذر هو أصل الكلمة
                 word["root"], word["lemma"] = root, lemma
+                word["verb"] = pos_tag == "V"
             elif lemma and word["lemma"] is None and "PREF" not in parts:
                 word["lemma"] = lemma
     result = []
@@ -99,7 +100,7 @@ def parse_morphology(path):
             "a": a,
             "question": (s, a) in questions,
             "words": [
-                {k: words[w][k] for k in ("text", "root", "lemma", "name")}
+                {k: words[w][k] for k in ("text", "root", "lemma", "name", "verb")}
                 for w in sorted(words)
             ],
         })
@@ -425,7 +426,9 @@ def build_quran(verses):
             [w["text"], w["root"] or "", w["lemma"] or ""] + ([1] if w["name"] else [])
             for w in v["words"]
         ])
-    return {"surahs": surahs}
+    # اللمّات الفعلية: تمييز الفعل من الاسم يفرّق «صَبَرَ» عن «جِنَّة» عند اتفاق الكتابة
+    verbs = sorted({w["lemma"] for v in verses for w in v["words"] if w["verb"] and w["lemma"]})
+    return {"surahs": surahs, "verbs": verbs}
 
 
 def main():
