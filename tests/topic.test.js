@@ -117,7 +117,7 @@ test("الأسماء المتفقة كتابةً المختلفة معنًى ل�
 test("صيغ الجمع والمشتقات بالإملاء الحديث", () => {
   assert.ok(displays(T.resolveQuery(index, "الصابرين").selected).includes(nfc("صابِر")));
   assert.deepEqual(displays(T.resolveQuery(index, "اليتامى").selected), [nfc("يَتِيم")]);
-  assert.deepEqual(displays(T.resolveQuery(index, "الوالدين").selected), [nfc("والِد")]);
+  assert.deepEqual(displays(T.resolveQuery(index, "الوالدين").selected), [nfc("والِد"), nfc("والِدَي")]);
   assert.deepEqual(displays(T.resolveQuery(index, "المناسك").selected), [nfc("مَنسَك")]);
 });
 
@@ -174,8 +174,9 @@ test("المصحف هو المرجع: «الحق» حَقّ لا أَلْحَق�
   assert.ok(displays(T.resolveQuery(index, "الحق").selected).includes(nfc("حَقّ")));
   assert.deepEqual(displays(T.resolveQuery(index, "الأنهار").selected), [nfc("نَهَر")]);
   assert.deepEqual(displays(T.resolveQuery(index, "الباب").selected), [nfc("باب")]);
-  assert.deepEqual(displays(T.resolveQuery(index, "المرأة").selected), [nfc("امْرَأَت")]);
-  assert.deepEqual(displays(T.resolveQuery(index, "ابنة").selected), [nfc("ابْنَت")]);
+  // تُعرض بالتاء المربوطة (امْرَأَة) ولمّتها في البيانات بالتاء المفتوحة
+  assert.deepEqual(T.resolveQuery(index, "المرأة").selected, [lemmaKey("امْرَأَت")]);
+  assert.deepEqual(T.resolveQuery(index, "ابنة").selected, [lemmaKey("ابْنَت")]);
   assert.ok(displays(T.resolveQuery(index, "التائبين").selected).includes(nfc("تابَ")));
 });
 
@@ -209,4 +210,65 @@ test("الخلاصة: محاور بلا تكرار، وعناوين نظيفة،
   assert.match(sabr, /سورتي البقرة والكهف \(8 لكلٍّ منهما\)/);
   const jannah = T.summarize(index, T.resolveQuery(index, "الجنة").selected);
   assert.ok(T.normalize(jannah.formulas[0].text).includes("تجريمنتحتهاالانهر"), "الصيغة الكاملة");
+});
+
+// ---------- حالات كشفتها جولة التحقق الثالثة ----------
+
+const sel = (q) => T.resolveQuery(index, q).selected;
+
+test("جذر واحد للكلمة المختارة، والهمزة التي كتبها المستخدم تحكم", () => {
+  assert.deepEqual(sel("الزاد"), [lemmaKey("زاد")]);
+  assert.deepEqual(sel("الشر"), [lemmaKey("شَرّ")]);
+  assert.deepEqual(sel("بدأ"), [lemmaKey("بَدَأَ")]);
+  assert.ok(!sel("الكره").includes(lemmaKey("كَرَّة")));
+  assert.ok(!sel("الكفر").includes(lemmaKey("كَفَّرَ")), "﴿وكفّر عنا سيئاتنا﴾ ليست من الكفر");
+  assert.deepEqual(sel("يحيى"), [lemmaKey("يَحْيَى")]);
+});
+
+test("صيغ أخرى للكتابة: ألف آخر الكلمة، والجمع دون «ال»، وواو الجذر", () => {
+  assert.deepEqual(sel("الزنا"), [lemmaKey("زِنَى")]);
+  assert.deepEqual(versesOf("المسجد الأقصى"), ["17:1"]);
+  assert.equal(sel("ليلى").length, 0);
+  assert.equal(sel("إلى").length, 0);
+  assert.deepEqual(sel("الأمهات"), [lemmaKey("أُمّ")]);
+  assert.deepEqual(sel("الأبناء"), [lemmaKey("ابْن")]);
+  assert.ok(!sel("زنا").includes(lemmaKey("وَزْن")));
+  const parents = versesOf("الوالدين");
+  assert.ok(parents.includes("31:14") && parents.includes("2:83"), "﴿بوالديه﴾ و﴿وبالوالدين﴾");
+});
+
+test("عبارات مشهورة بحروفها", () => {
+  assert.equal(versesOf("يا أيها الذين آمنوا").length, 89);
+  assert.equal(versesOf("أيها الذين آمنوا").length, 89);
+  assert.equal(versesOf("أولو الألباب").length, 16);
+  assert.deepEqual(versesOf("ذو القرنين"), ["18:83", "18:86", "18:94"]);
+  assert.ok(versesOf("ذلك الكتاب لا ريب فيه").includes("2:2"));
+  assert.ok(versesOf("إنا لله وإنا إليه راجعون").includes("2:156"));
+  assert.ok(versesOf("فإن مع العسر يسرا").includes("94:5"));
+  assert.ok(versesOf("رب اشرح لي صدري").includes("20:25"));
+  // الألقاب تُحذف، إلا إذا وردت العبارة في المصحف
+  assert.equal(versesOf("سبحانه وتعالى").length, 6);
+  assert.equal(T.resolveQuery(index, "رضي الله عنهم").missing.length, 0);
+});
+
+test("صيغ العبارة تحتويها، ولا صيغة مقطوعة الإضافة، والمحاور مرتبة", () => {
+  const r = T.resolveQuery(index, "في سبيل الله");
+  const sum = T.summarize(index, r.selected, T.phraseVerses(index, r.phrase), r.phrase);
+  for (const f of sum.formulas) assert.ok(T.normalize(f.text).includes("فيسبيلالله"), f.text);
+  for (const q of ["الصيام", "الكفر", "الأنبياء"]) {
+    for (const f of T.summarize(index, sel(q)).formulas) {
+      assert.ok(f.text.split(" ").length <= 10, f.text);
+      assert.ok(!/بِـَٔايَٰتِ$/.test(f.text), f.text);
+    }
+  }
+  const water = T.summarize(index, sel("الماء")).axes.list.map((ax) => ax.verses.length);
+  assert.deepEqual(water, [...water].sort((x, y) => y - x));
+});
+
+test("لا تتكرر صيغة عرض في نتيجة واحدة", () => {
+  for (const q of ["بني", "الابن", "الصلاة", "الجنة", "الحق"]) {
+    const r = T.resolveQuery(index, q);
+    const shown = [...r.selected, ...r.alternatives, ...r.siblings].map((k) => nfc(index.lemmas.get(k).display));
+    assert.equal(new Set(shown).size, shown.length, `${q}: ${shown.join("، ")}`);
+  }
 });

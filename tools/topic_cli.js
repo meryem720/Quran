@@ -15,7 +15,7 @@ const text = (i) => index.verses[i].words.map((w) => w[0]).join(" ");
 const disp = (k) => `${index.lemmas.get(k).display} (${index.lemmas.get(k).verses.length})`;
 
 if (r.phrase) {
-  console.log("عبارة:", r.phrase.map((p) => p.surface ? `«${p.word}»` : (p.prefix || "") + p.lemmas.map(disp).join(" أو ")).join(" + "));
+  console.log("عبارة:", r.phrase.map((p) => (p.prefix ? p.prefix + " " : "") + (p.surface ? `«${p.word}»` : p.lemmas.map(disp).join(" أو "))).join(" + "));
 }
 else console.log("اللمّات المختارة:", r.selected.map(disp).join("، ") || "—");
 if (r.missing.length) console.log("كلمات لم تُفهم:", r.missing.join("، "));
@@ -25,7 +25,7 @@ if (r.suggestions.length) console.log("اقتراحات:", r.suggestions.map(dis
 if (!r.selected.length) process.exit(0);
 
 const idxs = r.phrase ? T.phraseVerses(index, r.phrase) : T.topicVerses(index, r.selected);
-const sum = T.summarize(index, r.selected, idxs);
+const sum = T.summarize(index, r.selected, idxs, r.phrase);
 if (!sum.verses.length) { console.log("لا آيات."); process.exit(0); }
 const plainFmt = { esc: (x) => x, phrase: (x) => `﴿${x}﴾`, quote: (i) => `﴿${text(i)}﴾ (${ref(i)})` };
 console.log("\nالخلاصة:", T.summarySentences(index, sum, plainFmt).join(" "));

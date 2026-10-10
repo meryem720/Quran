@@ -85,6 +85,7 @@ function reasonChips([, , , ctx, phrase, roots, expression]) {
 
 function renderVerse(s, a) {
   if (!getVerse(s, a)) {
+    document.title = "الآية غير موجودة · تفسير القرآن بالقرآن";
     app.innerHTML = `<p class="empty">الآية غير موجودة.</p>`;
     return;
   }
@@ -153,9 +154,14 @@ function renderSearch(query) {
   // وبالإملاء الحديث: «الصابرين» تطابق ﴿ٱلصَّٰبِرِينَ﴾
   const qs = T.searchKey(query);
   const spelledMatch = (w) => qs.length >= 3 && (w === qs || (w.endsWith(qs) && w.length - qs.length <= 3));
+  // عبارة: كلماتها متتابعة («يوم القيامة»، «في سبيل الله»)
+  const toks = query.trim().split(/\s+/).map(normalize).filter(Boolean);
+  const tokKeys = toks.map((t) => T.searchKey(t));
+  const runAt = (words, spelled, i) => toks.every((t, j) => i + j < words.length
+    && (words[i + j] === t || (words[i + j].endsWith(t) && words[i + j].length - t.length <= 2) || spelled[i + j] === tokKeys[j]));
   const matches = state.normWords
     .filter(([, , words, lemmas, spelled]) => words.some((w) => w.includes(q)) || lemmas.includes(q) || lemmas.includes(bare)
-      || spelled.some(spelledMatch))
+      || spelled.some(spelledMatch) || (toks.length > 1 && words.some((_, i) => runAt(words, spelled, i))))
     .map(([s, a]) => [s, a]);
   renderList(`نتائج البحث عن «${escapeHtml(query)}»`, matches, { highlightWord: q, highlightBare: bare });
   document.title = `بحث: ${query} · تفسير القرآن بالقرآن`;
@@ -286,7 +292,7 @@ function renderTopic(arg) {
 
   const chipsHtml = phrase
     ? `<p class="hint">عبارة: الآيات التي تتتابع فيها ${phrase.map((p) =>
-        `«${escapeHtml(p.surface ? p.word : (p.prefix || "") + T.plain(idx.lemmas.get(p.lemmas[0]).display))}»`).join(" ثم ")}. · ${wordSearch}</p>`
+        `«${escapeHtml((p.prefix ? p.prefix + " " : "") + (p.surface ? p.word : T.plain(idx.lemmas.get(p.lemmas[0]).display)))}»`).join(" ثم ")}. · ${wordSearch}</p>`
     : `${lemmaChips(query, selected, options, withContext)}
       <p class="hint">الكلمات المعلَّمة ✓ هي التي تُجمع آياتها، ويمكن إضافة غيرها أو حذفها
         (يظهر مثال لكل كلمة عند الوقوف عليها بالمؤشر). · ${wordSearch}</p>`;
@@ -297,7 +303,7 @@ function renderTopic(arg) {
     return;
   }
 
-  const sum = T.summarize(idx, selected, phrase ? T.phraseVerses(idx, phrase) : undefined);
+  const sum = T.summarize(idx, selected, phrase ? T.phraseVerses(idx, phrase) : undefined, phrase);
   if (!sum.verses.length) {
     app.innerHTML = `<section class="card"><h2>موضوع: ${escapeHtml(query)}</h2>${chipsHtml}
       <p class="empty">لا توجد آيات تتتابع فيها هذه الكلمات.</p></section>`;
@@ -374,6 +380,10 @@ function renderTopic(arg) {
   state.topicViews.delete(viewKey);
   state.topicMore(false);
   while (saved && shown < saved.shown && shown < list.length) state.topicMore(false);
+  if (saved && saved.open && document.querySelectorAll) {
+    const panels = document.querySelectorAll("#topic-verses details.explain");
+    saved.open.forEach((i) => { if (panels[i]) panels[i].open = true; });
+  }
   if (saved && saved.y) setTimeout(() => window.scrollTo(0, saved.y), 0);
 }
 
@@ -452,7 +462,7 @@ function setupControls() {
   $("surah").innerHTML = state.surahs
     .map((s) => `<option value="${s.n}">${s.n}. ${s.name}</option>`)
     .join("");
-  $("surah").addEventListener("change", () => { state.navigatedByLink = true; location.hash = `${$("surah").value}:1`; });
+  $("surah").addEventListener("change", () => { markLinkNav(); location.hash = `${$("surah").value}:1`; });
   $("ayah").addEventListener("change", () => {
     const s = +$("surah").value;
     const max = state.surahs[s - 1].verses.length;
@@ -460,9 +470,17 @@ function setupControls() {
     location.hash = `${s}:${a}`;
   });
   // التنقل بالنقر على رابط أو بالبحث «زيارة جديدة»، والتنقل بأزرار المتصفح «رجوع»
-  document.addEventListener("click", (e) => { if (e.target.closest && e.target.closest("a[href^='#'], [data-href]")) state.navigatedByLink = true; }, true);
-  $("search-form").addEventListener("submit", (e) => {
+  // (نقرة لا تغيّر العنوان، مثل «الانتقال إلى الخلاصة»، لا تؤثر في الرجوع التالي)
+  const markLinkNav = () => {
+    const before = location.hash;
     state.navigatedByLink = true;
+    setTimeout(() => { if (location.hash === before) state.navigatedByLink = false; }, 0);
+  };
+  document.addEventListener("click", (e) => {
+    if (e.target.closest && e.target.closest("a[href^='#']:not([data-scroll]), [data-href]")) markLinkNav();
+  }, true);
+  $("search-form").addEventListener("submit", (e) => {
+    markLinkNav();
     e.preventDefault();
     const q = $("search").value.replace(/[|,%#]/g, " ").trim();
     if (!q) return;
@@ -497,7 +515,11 @@ function setupControls() {
   window.addEventListener("hashchange", (e) => {
     const old = e.oldURL ? e.oldURL.slice(e.oldURL.indexOf("#") >= 0 ? e.oldURL.indexOf("#") : e.oldURL.length) : "";
     const view = state.topicViews.get(old);
-    if (view) view.y = state.lastScrollY;
+    if (view) {
+      view.y = state.lastScrollY;
+      view.open = [...document.querySelectorAll("#topic-verses details.explain")]
+        .reduce((open, d, i) => (d.open ? open.concat(i) : open), []);
+    }
     route();
   });
   window.addEventListener("scroll", () => { state.lastScrollY = window.scrollY; }, { passive: true });
