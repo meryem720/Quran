@@ -167,3 +167,46 @@ test("آيات السياق بين مواضع القصة", () => {
   assert.ok(ctx.includes("19:20"), "قصة مريم في سورتها");
   assert.ok(ctx.every((r) => !sum.verses.map(ref).includes(r)));
 });
+
+// ---------- حالات كشفتها جولة التحقق الثانية ----------
+
+test("المصحف هو المرجع: «الحق» حَقّ لا أَلْحَقْ، و«الأنهار» نَهَر لا انْهارَ", () => {
+  assert.ok(displays(T.resolveQuery(index, "الحق").selected).includes(nfc("حَقّ")));
+  assert.deepEqual(displays(T.resolveQuery(index, "الأنهار").selected), [nfc("نَهَر")]);
+  assert.deepEqual(displays(T.resolveQuery(index, "الباب").selected), [nfc("باب")]);
+  assert.deepEqual(displays(T.resolveQuery(index, "المرأة").selected), [nfc("امْرَأَت")]);
+  assert.deepEqual(displays(T.resolveQuery(index, "ابنة").selected), [nfc("ابْنَت")]);
+  assert.ok(displays(T.resolveQuery(index, "التائبين").selected).includes(nfc("تابَ")));
+});
+
+test("حرف الجذر لا يُعدّ سابقة، وما لا يُعرف لا يُخمَّن", () => {
+  // «في» ليست «ك + في» (كفى)، و«الحجاج» ليست حِجَج
+  assert.equal(T.resolveQuery(index, "في").selected.length, 0);
+  assert.equal(T.resolveQuery(index, "الحجاج").selected.length, 0);
+  assert.equal(T.resolveQuery(index, "الإحرام").selected.length, 0);
+});
+
+test("العبارات بحروفها وألقاب الأسماء", () => {
+  assert.equal(versesOf("في سبيل الله").length, 43);
+  assert.deepEqual(versesOf("لا إله إلا الله"), ["37:35", "47:19"]);
+  assert.ok(versesOf("يا مريم").includes("3:42"));
+  assert.deepEqual(versesOf("ابنة عمران"), ["66:12"]);
+  assert.equal(versesOf("موسى عليه السلام").length, versesOf("موسى").length);
+});
+
+test("الخلاصة: محاور بلا تكرار، وعناوين نظيفة، ومثنى صحيح", () => {
+  const zakat = T.summarize(index, T.resolveQuery(index, "الزكاة").selected);
+  const roots = zakat.axes.list.map((ax) => ax.roots);
+  assert.equal(new Set(roots).size, roots.length, "محوران من الجذور نفسها يُدمجان");
+  assert.ok(zakat.axes.list[0].verses.map(ref).includes("21:73"), "﴿وإقام الصلاة وإيتاء الزكاة﴾ في المحور الأكبر");
+  const salat = T.summarize(index, T.resolveQuery(index, "الصلاة").selected);
+  for (const ax of salat.axes.list) {
+    assert.equal(new Set(ax.labels).size, ax.labels.length);
+    assert.ok(!ax.labels.includes("استعين"), "صيغة المعجم: استعان");
+  }
+  const fmt = { esc: (x) => x, phrase: (x) => x, quote: (i) => ref(i) };
+  const sabr = T.summarySentences(index, T.summarize(index, T.resolveQuery(index, "الصبر").selected), fmt).join(" ");
+  assert.match(sabr, /سورتي البقرة والكهف \(8 لكلٍّ منهما\)/);
+  const jannah = T.summarize(index, T.resolveQuery(index, "الجنة").selected);
+  assert.ok(T.normalize(jannah.formulas[0].text).includes("تجريمنتحتهاالانهر"), "الصيغة الكاملة");
+});

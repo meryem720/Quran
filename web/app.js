@@ -3,7 +3,7 @@
 // أسباب السياق (نفس الرموز في tools/build.py)
 const CONTEXT_REASONS = {
   1: "جواب ﴿وما أدراك﴾ في السياق",
-  2: "صفة متصلة بالآية السابقة",
+  2: "تبدأ بـ﴿الذين﴾ فتتصل بالآية السابقة غالبًا",
   3: "جواب الاستفهام في الآية التالية",
   4: "جواب السؤال في الآية التالية",
 };
@@ -26,6 +26,7 @@ const state = {
   topicViews: new Map(), // عنوان صفحة الموضوع -> {عدد المعروض، موضع القراءة}
   verseIndex: new Map(), // "s:a" -> رقم الآية في فهرس الموضوعات
   lastScrollY: 0,
+  navigatedByLink: false, // التنقل الحالي بنقر رابط (لا برجوع المتصفح)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -46,13 +47,14 @@ function refLabel(s, a) {
   return `${state.surahs[s - 1].name} ${a}`;
 }
 
-function verseHtml(s, a, { clickable = false, highlightRoot = null, highlightWord = null, highlightLemmas = null } = {}) {
+function verseHtml(s, a, { clickable = false, highlightRoot = null, highlightWord = null, highlightLemmas = null, highlightBare = null } = {}) {
   const words = getVerse(s, a);
   const parts = words.map(([text, root, lemma]) => {
     const hit = (highlightRoot && root === highlightRoot) ||
       (highlightLemmas && highlightLemmas.has(lemma)) ||
       (highlightWord && (normalize(text).includes(highlightWord) || normalize(lemma) === highlightWord
-        || T.spellingKey(text).includes(T.searchKey(highlightWord))));
+        || (highlightBare && normalize(lemma) === highlightBare)
+        || (T.searchKey(highlightWord).length >= 3 && T.spellingKey(text).endsWith(T.searchKey(highlightWord)))));
     const cls = "word" + (hit ? " hit" : "");
     if (clickable && root) {
       return `<span class="${cls}" tabindex="0" role="link" data-root="${escapeHtml(root)}" title="الجذر: ${escapeHtml(root)}">${escapeHtml(text)}</span>`;
@@ -150,11 +152,12 @@ function renderSearch(query) {
   const bare = q.startsWith("ال") && q.length > 3 ? q.slice(2) : q;
   // وبالإملاء الحديث: «الصابرين» تطابق ﴿ٱلصَّٰبِرِينَ﴾
   const qs = T.searchKey(query);
+  const spelledMatch = (w) => qs.length >= 3 && (w === qs || (w.endsWith(qs) && w.length - qs.length <= 3));
   const matches = state.normWords
     .filter(([, , words, lemmas, spelled]) => words.some((w) => w.includes(q)) || lemmas.includes(q) || lemmas.includes(bare)
-      || spelled.some((w) => w.includes(qs)))
+      || spelled.some(spelledMatch))
     .map(([s, a]) => [s, a]);
-  renderList(`نتائج البحث عن «${escapeHtml(query)}»`, matches, { highlightWord: q });
+  renderList(`نتائج البحث عن «${escapeHtml(query)}»`, matches, { highlightWord: q, highlightBare: bare });
   document.title = `بحث: ${query} · تفسير القرآن بالقرآن`;
 }
 
@@ -198,8 +201,19 @@ function lemmaExample(key) {
 
 const CHIP_KINDS = { main: "", alt: "معنى آخر للكتابة نفسها", sibling: "من الجذر نفسه" };
 
-// خانات اختيار الكلمات: ترتيبها ثابت (المختارة تلقائيًا، ثم المعاني الأخرى، ثم الجذر)
+// خانات اختيار الكلمات: ترتيبها ثابت، في مجموعات بعناوين ظاهرة
+// (المختارة تلقائيًا، ثم المعاني الأخرى للكتابة نفسها، ثم بقية الجذر)
+const CHIP_GROUPS = [["main", ""], ["alt", "معانٍ أخرى للكتابة نفسها:"], ["sibling", "من الجذر نفسه:"]];
+
 function lemmaChips(query, selected, options, withContext) {
+  return CHIP_GROUPS.map(([kind, heading]) => {
+    const chips = options.filter((o) => o.kind === kind);
+    if (!chips.length) return "";
+    return `<div class="lemma-chips">${heading ? `<span class="chips-label">${heading}</span>` : ""}${lemmaChipList(query, selected, chips, withContext)}</div>`;
+  }).join("");
+}
+
+function lemmaChipList(query, selected, options, withContext) {
   const idx = state.topicIndex;
   return options.map(({ key, kind }) => {
     const on = selected.includes(key);
@@ -216,12 +230,17 @@ function verseIndexOf(s, a) {
   return state.verseIndex.get(`${s}:${a}`);
 }
 
-// بيان الآية من القرآن: الآيات المرتبطة بها، ويُقدَّم منها ما كان من آيات الموضوع نفسه
+// بيان الآية من القرآن: الآيات المرتبطة بها. يُقدَّم ما بيّنه السياق (جواب ﴿وما أدراك﴾…)،
+// ثم ما كان من آيات الموضوع نفسه، ثم البقية بترتيب قوة الرابط
 function explanationItems(v, topicSet) {
   const items = state.related[`${v.s}:${v.a}`] || [];
-  const inTopic = items.filter((it) => topicSet.has(verseIndexOf(it[0], it[1])));
-  const others = items.filter((it) => !inTopic.includes(it));
-  return [...inTopic, ...others].slice(0, 3).map((it) => ({ item: it, inTopic: inTopic.includes(it) }));
+  const inTopic = (it) => topicSet.has(verseIndexOf(it[0], it[1]));
+  const rank = (it) => (it[3] ? 0 : inTopic(it) ? 1 : 2);
+  return items
+    .map((it, order) => ({ it, order }))
+    .sort((x, y) => rank(x.it) - rank(y.it) || x.order - y.order)
+    .slice(0, 3)
+    .map(({ it }) => ({ item: it, inTopic: inTopic(it) }));
 }
 
 function renderTopic(arg) {
@@ -266,9 +285,9 @@ function renderTopic(arg) {
   }
 
   const chipsHtml = phrase
-    ? `<p class="hint">عبارة: الآيات التي تتتابع فيها ${phrase.map((keys) =>
-        `«${escapeHtml(T.plain(idx.lemmas.get(keys[0]).display))}»`).join(" ثم ")}. · ${wordSearch}</p>`
-    : `<div class="lemma-chips">${lemmaChips(query, selected, options, withContext)}</div>
+    ? `<p class="hint">عبارة: الآيات التي تتتابع فيها ${phrase.map((p) =>
+        `«${escapeHtml(p.surface ? p.word : (p.prefix || "") + T.plain(idx.lemmas.get(p.lemmas[0]).display))}»`).join(" ثم ")}. · ${wordSearch}</p>`
+    : `${lemmaChips(query, selected, options, withContext)}
       <p class="hint">الكلمات المعلَّمة ✓ هي التي تُجمع آياتها، ويمكن إضافة غيرها أو حذفها
         (يظهر مثال لكل كلمة عند الوقوف عليها بالمؤشر). · ${wordSearch}</p>`;
 
@@ -326,7 +345,8 @@ function renderTopic(arg) {
 
   app.innerHTML = `
     <section class="card topic-head">
-      <h2>موضوع: ${escapeHtml(query)} <small>عدد الآيات: ${sum.verses.length}</small></h2>
+      <h2>موضوع: ${escapeHtml(query)} <small>عدد الآيات: ${sum.verses.length}${withContext && context.length
+        ? ` (ومعها ${context.length} من السياق)` : ""}</small></h2>
       ${chipsHtml}
       <p>${contextLink}<a href="#summary" data-scroll="summary">الانتقال إلى الخلاصة ↓</a></p>
     </section>
@@ -349,8 +369,9 @@ function renderTopic(arg) {
     $("topic-more").innerHTML = left > 0 ? `<button class="more" data-more>عرض المزيد (بقي ${left})</button>` : "";
   };
 
-  // الرجوع من آية إلى الموضوع يعيد ما عُرض وموضع القراءة
-  const saved = state.topicViews.get(viewKey);
+  // الرجوع من آية إلى الموضوع يعيد ما عُرض وموضع القراءة، أما الزيارة الجديدة فتبدأ من أوله
+  const saved = state.navigatedByLink ? null : state.topicViews.get(viewKey);
+  state.topicViews.delete(viewKey);
   state.topicMore(false);
   while (saved && shown < saved.shown && shown < list.length) state.topicMore(false);
   if (saved && saved.y) setTimeout(() => window.scrollTo(0, saved.y), 0);
@@ -369,8 +390,8 @@ function summaryHtml(sum) {
 
   // كل لفظ مقترن يفتح موضوعه بلمّته نفسها (فلا تختلط «آتى» بـ«أتى»)
   const cooccurHtml = sum.cooccur.map((c) =>
-    `<a class="topic-link" href="${topicHash(T.plain(c.display), [c.key])}" title="مثال: ${escapeHtml(lemmaExample(c.key))}">
-      ${escapeHtml(T.plain(c.display))} <small>${c.count}</small></a>`).join("");
+    `<a class="topic-link" href="${topicHash(c.label, [c.key])}" title="مثال: ${escapeHtml(lemmaExample(c.key))}">
+      ${escapeHtml(c.label)} <small>${c.count}</small></a>`).join("");
 
   const formulasHtml = sum.formulas.map((f) =>
     `<li>﴿<span class="q">${escapeHtml(f.text)}</span>﴾ — في ${T.countAr(f.count, "ayah")}، مثل ${ayahLink(f.example)}</li>`).join("");
@@ -416,6 +437,8 @@ function route() {
     // «%» غير مرمّزة في العنوان: نستعمله كما هو
   }
   window.scrollTo(0, 0);
+  // ينتهي أثر النقر بعد هذا العرض: التنقل التالي بالرجوع أو التقدّم في المتصفح
+  setTimeout(() => { state.navigatedByLink = false; }, 0);
   if (hash.startsWith("root/")) return renderRoot(hash.slice(5));
   if (hash.startsWith("search/")) return renderSearch(hash.slice(7));
   if (hash.startsWith("topic/")) return renderTopic(hash.slice(6));
@@ -429,14 +452,17 @@ function setupControls() {
   $("surah").innerHTML = state.surahs
     .map((s) => `<option value="${s.n}">${s.n}. ${s.name}</option>`)
     .join("");
-  $("surah").addEventListener("change", () => { location.hash = `${$("surah").value}:1`; });
+  $("surah").addEventListener("change", () => { state.navigatedByLink = true; location.hash = `${$("surah").value}:1`; });
   $("ayah").addEventListener("change", () => {
     const s = +$("surah").value;
     const max = state.surahs[s - 1].verses.length;
     const a = Math.min(Math.max(1, +$("ayah").value || 1), max);
     location.hash = `${s}:${a}`;
   });
+  // التنقل بالنقر على رابط أو بالبحث «زيارة جديدة»، والتنقل بأزرار المتصفح «رجوع»
+  document.addEventListener("click", (e) => { if (e.target.closest && e.target.closest("a[href^='#'], [data-href]")) state.navigatedByLink = true; }, true);
   $("search-form").addEventListener("submit", (e) => {
+    state.navigatedByLink = true;
     e.preventDefault();
     const q = $("search").value.replace(/[|,%#]/g, " ").trim();
     if (!q) return;
@@ -451,6 +477,8 @@ function setupControls() {
     if (scroll) {
       e.preventDefault();
       const target = $(scroll.dataset.scroll);
+      const header = document.querySelector("header.top");
+      if (header) target.style.scrollMarginTop = `${header.offsetHeight + 12}px`;
       target.scrollIntoView({ behavior: "smooth" });
       target.focus({ preventScroll: true });
       return;

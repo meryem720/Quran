@@ -20,7 +20,7 @@ async function load(hash) {
   const errors = [];
   const ctx = {
     console: { log() {}, warn() {}, error: (...a) => errors.push(a.map(String).join(" ")) },
-    document: { getElementById: el, querySelector: () => null, querySelectorAll: () => [], title: "" },
+    document: { getElementById: el, querySelector: () => null, querySelectorAll: () => [], addEventListener() {}, title: "" },
     location: { hash },
     fetch: async (url) => ({ json: async () => JSON.parse(fs.readFileSync(path.join(WEB, url), "utf8")) }),
     addEventListener() {}, scrollTo() {}, scrollY: 0,

@@ -14,7 +14,9 @@ const ref = (i) => `${index.verses[i].surahName} ${index.verses[i].a}`;
 const text = (i) => index.verses[i].words.map((w) => w[0]).join(" ");
 const disp = (k) => `${index.lemmas.get(k).display} (${index.lemmas.get(k).verses.length})`;
 
-if (r.phrase) console.log("عبارة:", r.phrase.map((keys) => keys.map(disp).join(" أو ")).join(" + "));
+if (r.phrase) {
+  console.log("عبارة:", r.phrase.map((p) => p.surface ? `«${p.word}»` : (p.prefix || "") + p.lemmas.map(disp).join(" أو ")).join(" + "));
+}
 else console.log("اللمّات المختارة:", r.selected.map(disp).join("، ") || "—");
 if (r.missing.length) console.log("كلمات لم تُفهم:", r.missing.join("، "));
 if (r.alternatives.length) console.log("معانٍ أخرى:", r.alternatives.map(disp).join("، "));

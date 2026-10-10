@@ -57,11 +57,27 @@
   }
 
   // ما يتصل بأول الكلمة من حروف: ﴿وَٱلصَّٰبِرِينَ﴾، ﴿فَٱصْبِرْ﴾، ﴿لِلْيَتَٰمَىٰ﴾
-  const CLITICS = ["", "و", "ف", "ب", "ل", "ك", "س", "وب", "ول", "وك", "وس", "فب", "فل", "فس", "لل", "ولل", "فلل"];
+  const CLITICS = [
+    "", "و", "ف", "ب", "ل", "ك", "س", "وب", "ول", "وك", "وس", "فب", "فل", "فس", "لل", "ولل", "فلل",
+    "ال", "وال", "فال", "بال", "كال", "وبال", "فبال",
+  ];
 
-  function matchesWithClitic(form, variant) {
+  // الحروف الأصلية للجذر (دون حروف العلة والهمزة)
+  function strongLetters(root) {
+    return [...normalize(root || "")].filter((c) => !"اويء".includes(c));
+  }
+
+  // هل كلمة المصحف هي ما كتبه المستخدم مع حروف متصلة بأولها؟ لا يُعدّ حرف الجذر سابقة:
+  // ﴿كَفَىٰ﴾ ليست «ك + في»، و﴿بَاسِرَةٌ﴾ ليست «ب + اسرة»، و﴿وَلِيًّا﴾ ليست «ول + يا»
+  function matchesWithClitic(form, variant, root) {
     if (!form.endsWith(variant)) return false;
-    return CLITICS.includes(form.slice(0, form.length - variant.length));
+    const prefix = form.slice(0, form.length - variant.length);
+    if (!CLITICS.includes(prefix)) return false;
+    if (!prefix) return true;
+    // لا «ال» مرتين: ﴿ٱلْأَلْبَٰبِ﴾ ليست «ال + الباب»
+    if (/^(ال|لل)/.test(variant) && /(ال|لل)$/.test(prefix)) return false;
+    if (variant.length < 3) return false;
+    return strongLetters(root).every((c) => variant.includes(c));
   }
 
   // ---------- معجم صغير ----------
@@ -80,6 +96,34 @@
     "أَيّ", "عِند", "بَيْن", "كُلّ", "كُلَّما", "بَعْض", "غَيْر", "دُون", "قَبْل", "بَعْد",
     "شَىْء", "مِثْل", "فَوْق", "تَحْت", "أَحَد", "إِحْدَى",
   ].map((x) => x.normalize("NFC")));
+
+  // لمّات في البيانات ليست كلمات قائمة بنفسها: تُعرض بصيغتها في المعجم
+  const DISPLAY_FIX = new Map([
+    ["اسْتَعِينُ", "اسْتَعانَ"], ["امْسَحُ", "مَسَحَ"], ["صابِرُ", "صابَرَ"], ["بُنَىّ", "ابْن"],
+  ].map(([k, v]) => [k.normalize("NFC"), v]));
+
+  // اسم العرض للّمّة: ماضٍ مختوم بضمة في البيانات يُعرض بالفتحة (عَقَلُ ← عَقَلَ)، لا المضارع (يُحافِظُ)
+  function displayOf(lemma, verb) {
+    const fixed = DISPLAY_FIX.get(lemma.normalize("NFC"));
+    if (fixed) return fixed;
+    if (verb && lemma.endsWith("\u064f") && !/^[يتن][\u064e\u064f]/.test(lemma)) return lemma.slice(0, -1) + "\u064e";
+    return lemma;
+  }
+
+  // عناوين بلا حركات، إلا إذا تشابهت كلمتان بعد حذفها (آخِر وآخَر) أو تكررت (ذِكْر وذَكَرَ)
+  function labelsOf(index, keys) {
+    const out = [];
+    const seen = new Set();
+    const bare = keys.map((k) => plain(index.lemmas.get(k).display));
+    keys.forEach((k, i) => {
+      if (seen.has(bare[i])) return; // ذِكْر وذَكَرَ عنوان واحد
+      seen.add(bare[i]);
+      const clash = [...index.byKey.get(searchKey(k)) || []].some((o) => o !== k && !index.lemmas.get(o).verb
+        && !index.lemmas.get(k).verb && plain(index.lemmas.get(o).display) === bare[i]);
+      out.push(clash ? index.lemmas.get(k).display : bare[i]);
+    });
+    return out;
+  }
 
   // ---------- العربية: صيغة المعدود ----------
 
@@ -137,7 +181,7 @@
           let info = lemmas.get(lemma);
           if (!info) {
             info = {
-              key: lemma, display: lemma, root: rootStr || "", name: !!isName,
+              key: lemma, display: displayOf(lemma, verbs.has(lemma)), root: rootStr || "", name: !!isName,
               verb: verbs.has(lemma), verses: [], forms: new Set(),
               function: FUNCTION_LEMMAS.has(lemma.normalize("NFC")),
             };
@@ -180,6 +224,25 @@
 
   // ---------- فهم السؤال ----------
 
+  // لمّات الكلمات المكتوبة في المصحف بحروف ما كتبه المستخدم: {لمّة -> عدد الكلمات}.
+  // taa: كتب المستخدم تاءً مربوطة، فلا تطابقها الهاء: «ابنة» غير ﴿ٱبْنَهُۥ﴾
+  function writtenLemmas(index, variant, taa = false) {
+    const counts = new Map();
+    for (const verse of index.verses) {
+      verse.spellings.forEach((forms, k) => {
+        const [text, rootStr, lemma] = verse.words[k];
+        if (!lemma || !isTopical(index, lemma)) return;
+        if (taa && !/[ةت]$/.test(plain(text).replace(/[\u0670\u06e5\u06e6]/g, ""))) return;
+        if (forms.some((f) => matchesWithClitic(f, variant, rootStr))) counts.set(lemma, (counts.get(lemma) || 0) + 1);
+      });
+    }
+    return counts;
+  }
+
+  function ranked(counts) {
+    return [...counts.entries()].sort((x, y) => y[1] - x[1]).map(([k]) => k);
+  }
+
   /**
    * يحوّل كلمة واحدة إلى لمّات. يرجع {selected، alternatives، siblings، suggestions}:
    *   selected: ما يُقصد غالبًا؛ alternatives: معانٍ أخرى للكتابة نفسها (﴿الجنة﴾: جِنَّة، جُنَّة؛
@@ -187,56 +250,70 @@
    */
   function resolveWord(index, word) {
     const variants = queryVariants(word);
+    const full = variants[0] || "";
     let selected = [];
     let alternatives = [];
     const byFreq = (x, y) => index.lemmas.get(y).verses.length - index.lemmas.get(x).verses.length;
+    const hitsOf = (v) => [...(index.byKey.get(v) || [])].filter((k) => isTopical(index, k));
 
-    // 1) لمّة مكتوبة كما كتبها المستخدم. الكلمة كاملة أولًا ثم دون «ال»، حتى لا تصير
-    //    «والدين» «دين»
-    for (const v of variants) {
-      selected = [...(index.byKey.get(v) || [])].filter((k) => isTopical(index, k));
-      if (selected.length) break;
+    // المرجع هو المصحف: لمّات الكلمات المكتوبة فيه بحروف ما كتبه المستخدم.
+    // همزة الوصل تسقط بعد «ال»: «المرأة» = ال + ﴿ٱمْرَأَة﴾
+    const taa = /ة$/.test(plain(word).trim());
+    const written = full ? writtenLemmas(index, full, taa) : new Map();
+    for (const v of variants.slice(1)) {
+      for (const [k, c] of writtenLemmas(index, "ا" + v, taa)) if (index.lemmas.get(k).key.startsWith("ٱ") || /^[اٱ]/.test(k)) written.set(k, (written.get(k) || 0) + c);
     }
+    // ولمّات تُكتب كما كتب (الكلمة كاملة، ثم دون «ال»)
+    const groups = variants.map((v) => ({ v, hits: hitsOf(v) })).filter((g) => g.hits.length);
 
-    // 2) صيغة جمع أو فعل (﴿الصابرين﴾، ﴿يصلون﴾، ﴿اليتامى﴾): لمّات الكلمات المكتوبة هكذا في المصحف
-    if (!selected.length) {
-      for (const v of variants) {
-        const counts = new Map();
-        for (const verse of index.verses) {
-          verse.spellings.forEach((forms, k) => {
-            if (!forms.some((f) => matchesWithClitic(f, v))) return;
-            const lemma = verse.words[k][2];
-            if (lemma && isTopical(index, lemma)) counts.set(lemma, (counts.get(lemma) || 0) + 1);
-          });
-        }
-        if (counts.size) {
-          const ranked = [...counts.entries()].sort((x, y) => y[1] - x[1]).map(([k]) => k);
-          selected = [ranked[0]];
-          alternatives = ranked.slice(1, 6);
-          break;
-        }
+    if (written.size) {
+      const support = (g) => g.hits.reduce((sum, k) => sum + (written.get(k) || 0), 0);
+      const best = groups.slice().sort((x, y) => support(y) - support(x))[0];
+      const top = ranked(written);
+      // «الحق»: ﴿ٱلْحَقُّ﴾ لمّتها حَقّ لا أَلْحَقْ؛ «الأنهار»: ﴿ٱلْأَنْهَٰرُ﴾ نَهَر لا انْهارَ
+      if (best && support(best) > 0 && support(best) >= written.get(top[0]) * 0.5) {
+        selected = best.hits;
+        alternatives = groups.filter((g) => g !== best).flatMap((g) => g.hits);
+      } else {
+        selected = [top[0]];
+        alternatives = [...top.slice(1, 6), ...groups.flatMap((g) => g.hits)];
       }
+    } else if (groups.length) {
+      selected = groups[0].hits;
+      alternatives = groups.slice(1).flatMap((g) => g.hits);
     }
 
-    // 2ب) جمع تكسير يختلف عن مفرده في الألف: «المناسك» ← مَنسَك، «المساجد» ← مَسْجِد
+    // صيغ لم ترد بلفظها في المصحف
     if (!selected.length) {
-      const noAlef = (x) => x.replace(/ا/g, "");
-      for (const v of variants) {
-        if (noAlef(v).length < 3) continue;
-        const hits = [...index.lemmas.values()]
-          .filter((info) => isTopical(index, info.key) && noAlef(searchKey(info.key)) === noAlef(v))
-          .sort((x, y) => y.verses.length - x.verses.length)
-          .map((info) => info.key);
+      const tries = [
+        // تاء مفتوحة في رسم المصحف يكتبها المستخدم ة: «ابنة» ← ابْنَت
+        ...variants.filter((v) => /ه$/.test(v)).map((v) => v.replace(/ه$/, "ت")),
+        // جمع سالم: «التائبين» ← تائِب، «الصائمون» ← صائِم
+        ...variants.filter((v) => v.length > 4 && /(ين|ون|ات)$/.test(v)).map((v) => v.slice(0, -2)),
+      ];
+      for (const v of tries) {
+        const hits = hitsOf(v).filter((k) => !index.lemmas.get(k).verb);
         if (hits.length) {
-          selected = [hits[0]];
-          alternatives = hits.slice(1, 6);
+          selected = hits;
+          break;
+        }
+      }
+    }
+    if (!selected.length) {
+      // جمع تكسير على «مَفاعِل» من مفرد «مَفْعَل»: «المناسك» ← مَنسَك، «المساجد» ← مَسْجِد
+      for (const v of variants) {
+        if (v.length < 5 || v[2] !== "ا") continue;
+        const single = v.slice(0, 2) + v.slice(3);
+        const hits = hitsOf(single).filter((k) => !index.lemmas.get(k).verb);
+        if (hits.length) {
+          selected = hits;
           break;
         }
       }
     }
 
-    // 3) أسماء تتفق كتابتها وتختلف معانيها (جَنَّة، جِنَّة، جُنَّة): الأكثر ورودًا هو المختار،
-    //    والباقي معانٍ أخرى. الفعل والاسم معًا (صَبَرَ، صَبْر) يبقيان مختارين.
+    // أسماء تتفق كتابتها وتختلف معانيها (جَنَّة، جِنَّة، جُنَّة): الأكثر ورودًا هو المختار،
+    // والباقي معانٍ أخرى. الفعل والاسم معًا (صَبَرَ، صَبْر) يبقيان مختارين.
     const nouns = selected.filter((k) => !index.lemmas.get(k).verb && !SAME_WORD.has(k.normalize("NFC"))).sort(byFreq);
     if (nouns.length > 1) {
       const others = nouns.slice(1);
@@ -244,27 +321,27 @@
       alternatives = [...others, ...alternatives.filter((k) => !others.includes(k))];
     }
 
-    // 4) لمّة من الجذر نفسه كل صيغها هي ما كتبه المستخدم بحروفه (﴿رِبًا﴾ في الروم 39 لمّتها «رِب»)
-    const typed = new Set(variants);
+    // لمّة من الجذر نفسه كل صيغها هي ما كتبه المستخدم بحروفه (﴿رِبًا﴾ في الروم 39 لمّتها «رِب»)
     for (const key of [...selected]) {
       const r = index.lemmas.get(key).root;
       if (!r) continue;
       for (const k of index.rootLemmas.get(r)) {
         const forms = index.lemmas.get(k).forms;
-        if (!selected.includes(k) && !alternatives.includes(k) && forms.size && [...forms].every((f) => [...typed].some((t) => matchesWithClitic(f, t)))) {
+        if (!selected.includes(k) && !alternatives.includes(k) && forms.size
+          && [...forms].every((f) => variants.some((t) => matchesWithClitic(f, t, r)))) {
           selected.push(k);
         }
       }
     }
 
-    // 5) جذر كل ألفاظه بمعنى واحد: يُجمع كله
+    // جذر كل ألفاظه بمعنى واحد: يُجمع كله
     for (const key of [...selected]) {
       const r = index.lemmas.get(key).root;
       if (WHOLE_ROOTS.has(r)) {
         for (const k of [...index.rootLemmas.get(r)].sort(byFreq)) if (!selected.includes(k)) selected.push(k);
       }
     }
-    alternatives = alternatives.filter((k) => !selected.includes(k));
+    alternatives = [...new Set(alternatives)].filter((k) => !selected.includes(k));
 
     const taken = new Set([...selected, ...alternatives]);
     const siblings = [];
@@ -278,15 +355,9 @@
     let suggestions = [];
     if (!selected.length) {
       const q = variants[variants.length - 1] || "";
-      const noAlef = (x) => x.replace(/ا/g, "");
       if (q.length >= 2) {
         suggestions = [...index.lemmas.values()]
-          .filter((info) => isTopical(index, info.key))
-          .filter((info) => {
-            const k = searchKey(info.key);
-            // «المناسك» ← مَنسَك: جمع التكسير يختلف عن مفرده في الألف غالبًا
-            return k.includes(q) || (k.length >= 3 && noAlef(k) === noAlef(q));
-          })
+          .filter((info) => isTopical(index, info.key) && searchKey(info.key).includes(q))
           .sort((x, y) => y.verses.length - x.verses.length)
           .slice(0, 12)
           .map((info) => info.key);
@@ -295,24 +366,66 @@
     return { selected, alternatives, siblings, suggestions };
   }
 
+  // ألفاظ تُذكر مع الأسماء وليست من القرآن، فتُحذف من السؤال: «موسى عليه السلام»
+  const HONORIFICS = /(صلى الله عليه وسلم|عليه الصلاة والسلام|(عليه|عليها|عليهما|عليهم) السلام|رضي الله (عنه|عنها|عنهم|عنهما)|سبحانه وتعالى|عز وجل|جل جلاله)/g;
+
+  // الكلمة حرف أو أداة (في، على، لا، إن، عليه): تُطابق في العبارة بكتابتها، لا بلمّة تشبهها
+  function isParticle(index, word) {
+    const v = searchKey(word);
+    const exact = [...(index.byKey.get(v) || [])];
+    if (exact.length) {
+      // «إلا» تُكتب كـ«آلاء» بعد حذف الهمزة: الحكم للأكثر ورودًا
+      const freq = (keys) => keys.reduce((n, k) => n + index.lemmas.get(k).verses.length, 0);
+      return freq(exact.filter((k) => !isTopical(index, k))) > freq(exact.filter((k) => isTopical(index, k)));
+    }
+    let particle = 0;
+    let content = 0;
+    for (const verse of index.verses) {
+      verse.spellings.forEach((forms, k) => {
+        if (!forms.includes(v)) return;
+        const lemma = verse.words[k][2];
+        if (lemma && isTopical(index, lemma)) content++;
+        else particle++;
+      });
+    }
+    return particle > 0 && particle >= content;
+  }
+
   /**
-   * يفهم ما كتبه المستخدم: كلمة (الصلاة) أو عبارة (يوم القيامة، بني إسرائيل).
-   * في العبارة: phrase = [لمّات كل كلمة]، والآيات هي التي تتتابع فيها الكلمات.
+   * يفهم ما كتبه المستخدم: كلمة (الصلاة) أو عبارة (يوم القيامة، في سبيل الله، يا مريم).
+   * في العبارة phrase = أجزاء متتابعة، كل جزء:
+   *   {word, lemmas: [لمّات]} لكلمة ذات معنى، أو {word, surface: [صيغ]} لحرف يطابق بكتابته،
+   *   وprefix: "يا" للنداء المتصل في رسم المصحف (﴿يَٰمَرْيَمُ﴾).
    */
   function resolveQuery(index, query) {
-    const words = query.replace(/[^\p{L}\p{M}\s]/gu, " ").trim().split(/\s+/).filter(Boolean);
+    const words = query.replace(HONORIFICS, " ").replace(/[^\p{L}\p{M}\s]/gu, " ").trim().split(/\s+/).filter(Boolean);
     if (words.length <= 1) return { ...resolveWord(index, words[0] || ""), phrase: null, missing: [] };
 
-    const parts = words.map((w) => ({ word: w, ...resolveWord(index, w) }));
-    const missing = parts.filter((p) => !p.selected.length).map((p) => p.word);
-    // في العبارة يكفي تتابع الكلمات للتمييز، فتُقبل كل معاني الكتابة:
-    // ﴿لَيْلَةِ ٱلْقَدْرِ﴾ لمّتها قَدْر لا قَدَر
-    const phrase = missing.length ? null : parts.map((p) => [...p.selected, ...p.alternatives]);
-    return {
-      selected: phrase ? [...new Set(phrase.flat())] : [],
-      alternatives: [], siblings: [], suggestions: [],
-      phrase, missing,
-    };
+    const parts = [];
+    const missing = [];
+    let prefix = "";
+    for (const w of words) {
+      if (searchKey(w) === "يا") {
+        prefix = "يا";
+        continue;
+      }
+      if (!prefix && isParticle(index, w)) {
+        parts.push({ word: w, surface: queryVariants(w).slice(0, 1) });
+        continue;
+      }
+      const r = resolveWord(index, w);
+      if (!r.selected.length) missing.push(w);
+      // يكفي تتابع الكلمات للتمييز، فتُقبل كل معاني الكتابة: ﴿لَيْلَةِ ٱلْقَدْرِ﴾ لمّتها قَدْر لا قَدَر
+      parts.push({ word: w, lemmas: [...r.selected, ...r.alternatives], prefix });
+      prefix = "";
+    }
+    const ok = !missing.length && parts.some((p) => p.lemmas);
+    const selected = ok ? [...new Set(parts.flatMap((p) => p.lemmas || []))] : [];
+    // كلمة واحدة ذات معنى بعد حذف الألقاب: «موسى عليه السلام» = موسى
+    if (ok && parts.length === 1 && !parts[0].prefix) {
+      return { ...resolveWord(index, parts[0].word), phrase: null, missing: [] };
+    }
+    return { selected, alternatives: [], siblings: [], suggestions: [], phrase: ok ? parts : null, missing };
   }
 
   // ---------- آيات الموضوع ----------
@@ -326,14 +439,21 @@
     return [...set].sort((x, y) => x - y);
   }
 
-  // آيات تتتابع فيها كلمات العبارة: ﴿يَوْمَ ٱلْقِيَٰمَةِ﴾
+  // آيات تتتابع فيها أجزاء العبارة: ﴿يَوْمَ ٱلْقِيَٰمَةِ﴾، ﴿فِى سَبِيلِ ٱللَّهِ﴾، ﴿يَٰمَرْيَمُ﴾
   function phraseVerses(index, phrase) {
-    const sets = phrase.map((keys) => new Set(keys));
-    const first = topicVerses(index, phrase[0]);
-    return first.filter((i) => {
-      const lem = index.verses[i].words.map((w) => w[2]);
-      for (let k = 0; k + sets.length <= lem.length; k++) {
-        if (sets.every((set, j) => set.has(lem[k + j]))) return true;
+    const matchers = phrase.map((p) => {
+      if (p.surface) {
+        const forms = new Set(p.surface.flatMap((v) => [v, "و" + v, "ف" + v]));
+        return (verse, k) => verse.spellings[k].some((f) => forms.has(f));
+      }
+      const set = new Set(p.lemmas);
+      return (verse, k) => set.has(verse.words[k][2]) && (!p.prefix || verse.spellings[k].some((f) => /^[وف]?يا/.test(f)));
+    });
+    const anchor = phrase.find((p) => p.lemmas);
+    return topicVerses(index, anchor.lemmas).filter((i) => {
+      const verse = index.verses[i];
+      for (let k = 0; k + matchers.length <= verse.words.length; k++) {
+        if (matchers.every((m, j) => m(verse, k + j))) return true;
       }
       return false;
     });
@@ -399,7 +519,7 @@
       }
     }
     // في الموضوع الصغير لا يكفي تكرار مرتين ليكون اقترانًا
-    const minCount = n < 10 ? 2 : n < 30 ? 3 : Math.max(3, Math.ceil(n * 0.04));
+    const minCount = n < 10 ? Math.max(2, Math.ceil(n * 0.3)) : n < 30 ? 3 : Math.max(3, Math.ceil(n * 0.04));
     const out = [];
     for (const [key, c] of counts) {
       if (c < minCount) continue;
@@ -408,13 +528,20 @@
       out.push({ key, count: c, score: c * Math.log(lift) });
     }
     out.sort((x, y) => y.score - x.score || y.count - x.count);
-    return out.slice(0, MAX_COOCCUR).map((o) => ({
-      key: o.key,
-      display: index.lemmas.get(o.key).display,
-      count: o.count,
-      score: o.score,
-      example: idxs.find((i) => index.verses[i].content.has(o.key)),
-    }));
+    // لفظان يتشابهان بلا حركات (ذِكْر وذَكَرَ) يُعرضان مرة واحدة
+    const seen = new Set();
+    return out
+      .map((o) => ({ ...o, label: labelsOf(index, [o.key])[0] }))
+      .filter((o) => !seen.has(o.label) && seen.add(o.label))
+      .slice(0, MAX_COOCCUR)
+      .map((o) => ({
+        key: o.key,
+        display: index.lemmas.get(o.key).display,
+        label: o.label,
+        count: o.count,
+        score: o.score,
+        example: idxs.find((i) => index.verses[i].content.has(o.key)),
+      }));
   }
 
   // الصيغ المتكررة: أطول عبارة فيها لفظ الموضوع وتتكرر في آيات منه
@@ -434,6 +561,9 @@
         for (let size = 2; size <= FORMULA_MAX_WORDS && k + size <= words.length; size++) {
           const span = words.slice(k, k + size);
           if (!span.some((w) => keys.has(w[2]))) continue;
+          // لا تنتهي العبارة بحرف: ﴿ثُمَّ يَتُوبُونَ مِن﴾
+          const last = span[span.length - 1];
+          if (!last[1] && !last[3]) continue;
           // فيها لفظ ذو معنى غير لفظ الموضوع: «أقيموا الصلاة» لا «في الصلاة» ولا «قال موسى»
           if (!span.some((w) => w[2] && !keys.has(w[2]) && index.verses[i].content.has(w[2]))) continue;
           const key = [wordKey(span[0], true), ...wk.slice(k + 1, k + size)].join(" ");
@@ -453,7 +583,11 @@
       const s = sig(e);
       if (!longest.has(s) || longest.get(s).size < e.size) longest.set(s, e);
     }
-    const closed = repeated.filter((e) => longest.get(sig(e)) === e);
+    let closed = repeated.filter((e) => longest.get(sig(e)) === e);
+    // العبارة القصيرة تدخل في أطول منها وردت في آيات قريبة العدد: تُعرض الأطول
+    // (﴿جَنَّٰتٍ تَجْرِى مِن تَحْتِهَا ٱلْأَنْهَٰرُ﴾ 27 لا ﴿جَنَّٰتٍ تَجْرِى﴾ 28)
+    closed = closed.filter((e) => !closed.some((o) => o.size > e.size && ` ${o.key} `.includes(` ${e.key} `)
+      && o.verses.size >= e.verses.size * 0.75));
     closed.sort((x, y) => y.verses.size - x.verses.size || y.size - x.size);
 
     // نختار الأكثر تكرارًا، ونتجاوز ما يتداخل مع عبارة اختيرت (يشتركان في ثلاث كلمات متتالية،
@@ -550,12 +684,13 @@
             count.set(key, (count.get(key) || 0) + 1);
           }
         }
-        const minShare = Math.max(2, Math.ceil(g.length * 0.25));
-        const labels = [...weight.entries()]
+        const minShare = Math.max(2, Math.ceil(g.length * 0.34));
+        const labelKeys = [...weight.entries()]
           .filter(([key]) => count.get(key) >= minShare)
           .sort((x, y) => y[1] - x[1])
-          .slice(0, 3)
-          .map(([key]) => plain(index.lemmas.get(key).display));
+          .map(([key]) => key);
+        const labels = labelsOf(index, labelKeys).slice(0, 3);
+        const roots = labelKeys.slice(0, 3).map((key) => index.lemmas.get(key).root || key).sort().join("|");
         // الآية الممثّلة: الأقرب إلى بقية آيات المحور
         const total = sumVectors(g.map((m) => vectors[m]));
         let medoid = g[0];
@@ -567,10 +702,18 @@
             medoid = m;
           }
         }
-        return { labels, verses: g.map((m) => idxs[m]).sort((x, y) => x - y), representative: idxs[medoid] };
+        return { labels, roots, verses: g.map((m) => idxs[m]).sort((x, y) => x - y), representative: idxs[medoid] };
       })
       .filter((ax) => ax.labels.length)
       .sort((x, y) => y.verses.length - x.verses.length || x.verses[0] - y.verses[0]);
+    // ﴿وَأَقَامَ ٱلصَّلَوٰةَ وَءَاتَى ٱلزَّكَوٰةَ﴾ و﴿وَإِقَامَ ٱلصَّلَوٰةِ وَإِيتَآءَ ٱلزَّكَوٰةِ﴾ محور واحد
+    for (let k = 0; k < list.length; k++) {
+      const into = list.findIndex((o, j) => j < k && o.roots === list[k].roots);
+      if (into >= 0) {
+        list[into].verses = list[into].verses.concat(list[k].verses).sort((x, y) => x - y);
+        list.splice(k--, 1);
+      }
+    }
     return { list, skipped: false, rest: idxs.length - list.reduce((s, ax) => s + ax.verses.length, 0) };
   }
 
@@ -639,10 +782,13 @@
       else if (groups.length < 3) groups.push({ count: x.count, names: [x.name] });
       else break;
     }
-    return groups.map((g) => {
-      if (g.names.length === 1) return `${g.names[0]} (${g.count})`;
-      const names = g.names.length > 3 ? `${g.names.slice(0, 3).join("، ")} وغيرها` : g.names.join(" و");
-      return `${names} (${g.count} لكلٍّ منها)`;
+    return groups.map((g, i) => {
+      const n = g.names.length;
+      // أول المجموعات بعد «في»: سورة البقرة، سورتي البقرة والكهف، سور البقرة والنساء والنحل
+      const lead = i === 0 ? (n === 1 ? "سورة " : n === 2 ? "سورتي " : "سور ") : "";
+      if (n === 1) return `${lead}${g.names[0]} (${g.count})`;
+      const names = n > 3 ? `${g.names.slice(0, 3).join(" و")} وغيرها` : g.names.join(" و");
+      return `${lead}${names} (${g.count} لكلٍّ ${n === 2 ? "منهما" : "منها"})`;
     });
   }
 
@@ -656,13 +802,13 @@
     if (sum.surahs.length === 1) first += `، هي سورة ${sum.surahs[0].name}`;
     else {
       const top = topSurahsText(sum.surahs);
-      if (top.length) first += `، أكثرها في سورة ${top.join("، ثم ")}`;
+      if (top.length) first += `، أكثرها في ${top.join("، ثم ")}`;
     }
     sentences.push(first + ".");
 
     if (sum.cooccur.length) {
       sentences.push(`وأكثر ما يقترن به من الألفاظ: ${sum.cooccur.slice(0, 5)
-        .map((c) => `«${fmt.esc(plain(c.display))}» (في ${countAr(c.count, "ayah")})`).join("، ")}.`);
+        .map((c) => `«${fmt.esc(c.label)}» (في ${countAr(c.count, "ayah")})`).join("، ")}.`);
     }
     if (sum.formulas.length) {
       const f = sum.formulas[0];
@@ -671,7 +817,8 @@
     const list = sum.axes.list;
     if (list.length > 1) {
       const shown = list.slice(0, 5);
-      sentences.push(`وتدور آياته حول ${countAr(list.length, "axis")}، أكبرها: ${shown
+      const intro = list.length === 2 ? "هما" : list.length <= 5 ? "هي" : "أكبرها";
+      sentences.push(`وتدور آياته حول ${countAr(list.length, "axis")}، ${intro}: ${shown
         .map((ax) => `«${fmt.esc(ax.labels.join("، "))}» (${ax.verses.length})`).join("؛ ")}.`);
     }
     if (sum.central.length) sentences.push(`وأجمع آية فيه: ${fmt.quote(sum.central[0])}.`);

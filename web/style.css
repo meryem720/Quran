@@ -191,7 +191,8 @@ h2 small { color: var(--muted); font-weight: normal; font-size: 0.85rem; }
 .topic-link:hover, .lemma-chip:hover { border-color: var(--accent); text-decoration: none; }
 .topic-link small, .lemma-chip small { color: var(--muted); }
 
-.lemma-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.lemma-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; align-items: center; }
+.chips-label { color: var(--muted); font-size: 0.85rem; }
 .lemma-chip { font-family: var(--quran-font); font-size: 1.1rem; }
 .lemma-chip.on { background: var(--accent-soft); border-color: var(--accent); }
 
@@ -218,7 +219,8 @@ button.more {
 
 .summary { border-color: var(--accent); scroll-margin-top: 90px; }
 .summary:focus { outline: none; }
-.topic-verse:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.topic-verse:focus { outline: none; }
+.topic-verse:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .context-verse { border-style: dashed; }
 .summary h2 { margin-top: 0; }
 .summary h3 { font-size: 1rem; margin: 18px 0 6px; color: var(--accent); }
