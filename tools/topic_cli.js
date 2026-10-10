@@ -1,10 +1,12 @@
 // يطبع خلاصة موضوع من سطر الأوامر، للتجربة والتقييم:
 //   node tools/topic_cli.js الصلاة
+//   node tools/topic_cli.js الصلاة --all   (مع نص كل الآيات)
 const path = require("path");
 const T = require(path.join(__dirname, "..", "web", "topic.js"));
 const quran = require(path.join(__dirname, "..", "web", "data", "quran.json"));
 
-const query = process.argv.slice(2).join(" ");
+const args = process.argv.slice(2);
+const query = args.filter((x) => !x.startsWith("--")).join(" ");
 const index = T.buildIndex(quran.surahs);
 const { selected, alternatives, siblings, suggestions } = T.resolveQuery(index, query);
 const ref = (i) => `${index.verses[i].surahName} ${index.verses[i].a}`;
@@ -32,4 +34,4 @@ for (const ax of sum.axes.list) {
 console.log(`  آيات خارج المحاور: ${sum.axes.rest}`);
 console.log("أجمع الآيات:");
 for (const i of sum.central) console.log(`  ${ref(i)}: ${text(i)}`);
-if (process.argv.includes("--all") || process.env.ALL) for (const i of sum.verses) console.log(`- ${ref(i)}: ${text(i)}`);
+if (args.includes("--all") || process.env.ALL) for (const i of sum.verses) console.log(`- ${ref(i)}: ${text(i)}`);

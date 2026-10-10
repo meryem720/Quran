@@ -305,7 +305,7 @@ function summaryHtml(sum) {
 
   const axesHtml = sum.axes.skipped
     ? `<p class="hint">الموضوع واسع (${T.countAr(sum.verses.length, "ayah")})، فلم تُحسب محاوره. يمكن اختيار كلمة أدق.</p>`
-    : axes.map((ax) => `
+    : sum.axes.list.map((ax) => `
       <div class="axis-block">
         <h4>${escapeHtml(ax.labels.join("، "))} <small>${T.countAr(ax.verses.length, "ayah")}</small></h4>
         <div class="quote">${quote(ax.representative)}</div>
