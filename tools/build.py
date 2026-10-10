@@ -79,9 +79,11 @@ def parse_morphology(path):
             if "INTG" in tags.split("|"):
                 questions.add((s, a))
             words = verses.setdefault((s, a), {})
-            word = words.setdefault(w, {"text": "", "root": None, "lemma": None})
+            word = words.setdefault(w, {"text": "", "root": None, "lemma": None, "name": False})
             word["text"] += form
             parts = tags.split("|")
+            if "PN" in parts:
+                word["name"] = True  # اسم علم: موسى، فرعون، مكة…
             root = next((t[5:] for t in parts if t.startswith("ROOT:")), None)
             lemma = next((t[4:] for t in parts if t.startswith("LEM:")), None)
             if root:
@@ -97,7 +99,7 @@ def parse_morphology(path):
             "a": a,
             "question": (s, a) in questions,
             "words": [
-                {"text": words[w]["text"], "root": words[w]["root"], "lemma": words[w]["lemma"]}
+                {k: words[w][k] for k in ("text", "root", "lemma", "name")}
                 for w in sorted(words)
             ],
         })
@@ -342,7 +344,7 @@ def context_links(verses):
 def shared_roots(vi, vj, idf, limit=3):
     ri = {w["root"] for w in vi["words"] if w["root"]}
     rj = {w["root"] for w in vj["words"] if w["root"]}
-    common = sorted(ri & rj, key=lambda r: -idf.get("R:" + r, 0))
+    common = sorted(ri & rj, key=lambda r: (-idf.get("R:" + r, 0), r))
     return common[:limit]
 
 
@@ -418,7 +420,11 @@ def build_quran(verses):
     for v in verses:
         if v["s"] > len(surahs):
             surahs.append({"n": v["s"], "name": SURAH_NAMES[v["s"] - 1], "verses": []})
-        surahs[-1]["verses"].append([[w["text"], w["root"] or "", w["lemma"] or ""] for w in v["words"]])
+        # كل كلمة: [النص، الجذر، اللمّة] ويُضاف 1 لاسم العلم
+        surahs[-1]["verses"].append([
+            [w["text"], w["root"] or "", w["lemma"] or ""] + ([1] if w["name"] else [])
+            for w in v["words"]
+        ])
     return {"surahs": surahs}
 
 

@@ -167,6 +167,66 @@ h2 small { color: var(--muted); font-weight: normal; font-size: 0.85rem; }
 .chip .q { font-family: var(--quran-font); }
 .chip.roots { background: var(--chip-roots); }
 
+/* ---------- الموضوعات ---------- */
+
+.nav-link {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+}
+.nav-link:hover { border-color: var(--accent); text-decoration: none; }
+
+.topics-grid { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.topic-link, .lemma-chip {
+  display: inline-block;
+  padding: 2px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+}
+.topic-link:hover, .lemma-chip:hover { border-color: var(--accent); text-decoration: none; }
+.topic-link small, .lemma-chip small { color: var(--muted); }
+
+.lemma-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.lemma-chip { font-family: var(--quran-font); font-size: 1.1rem; }
+.lemma-chip.on { background: var(--accent-soft); border-color: var(--accent); }
+
+.hint { color: var(--muted); font-size: 0.9rem; margin: 6px 0; }
+
+.chip.axis { background: var(--chip-roots); font-family: var(--quran-font); }
+
+details.explain { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 6px; }
+details.explain summary { cursor: pointer; color: var(--accent); }
+.explain-item { padding: 8px 12px 4px; border-inline-start: 3px solid var(--accent-soft); margin: 8px 0; }
+.explain-item .quran { font-size: 1.3rem; }
+
+button.more {
+  display: block;
+  margin: 0 auto 16px;
+  font: inherit;
+  padding: 6px 18px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.summary { border-color: var(--accent); }
+.summary h2 { margin-top: 0; }
+.summary h3 { font-size: 1rem; margin: 18px 0 6px; color: var(--accent); }
+.summary h4 { margin: 0 0 4px; font-family: var(--quran-font); font-size: 1.1rem; font-weight: normal; }
+.summary h4 small { font-family: var(--ui-font); color: var(--muted); font-size: 0.85rem; }
+.summary-text { font-size: 1.05rem; line-height: 2.1; }
+.summary .q, .quote .q, .formulas .q { font-family: var(--quran-font); font-size: 1.15em; }
+.quote { margin: 6px 0; line-height: 2.1; }
+.axis-block { padding: 8px 12px; margin: 8px 0; background: var(--bg); border-radius: 10px; }
+.refs { font-size: 0.85rem; color: var(--muted); margin: 4px 0 0; }
+.formulas { padding-inline-start: 20px; margin: 4px 0; }
+.note { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 16px; }
+
 .foot {
   max-width: 860px;
   margin: 0 auto;
