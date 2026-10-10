@@ -42,6 +42,11 @@ class PipelineTest(unittest.TestCase):
 
         # ﴿هل أتاك حديث الجنود﴾ ← ﴿فرعون وثمود﴾
         self.assertEqual(links[i[(85, 17)]][i[(85, 18)]], build.CONTEXT_QUESTION)
+        # ﴿لأي يوم أجلت﴾ ← ﴿ليوم الفصل﴾ و﴿وما تلك بيمينك يا موسى﴾ ← ﴿قال هي عصاي﴾
+        self.assertEqual(links[i[(77, 12)]][i[(77, 13)]], build.CONTEXT_DIALOGUE)
+        self.assertEqual(links[i[(20, 17)]][i[(20, 18)]], build.CONTEXT_DIALOGUE)
+        # اللازمة ﴿فبأي آلاء ربكما تكذبان﴾ ليست سؤالًا يُجاب عنه في الآية التالية
+        self.assertNotIn(i[(55, 17)], links.get(i[(55, 16)], {}))
 
     def test_expression_matches_different_forms(self):
         scores, _ = build.expression_similarity(self.verses)

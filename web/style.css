@@ -164,7 +164,7 @@ h2 small { color: var(--muted); font-weight: normal; font-size: 0.85rem; }
 }
 .chip.context { background: var(--chip-context); }
 .chip.phrase { background: var(--chip-phrase); }
-.chip.phrase .q { font-family: var(--quran-font); }
+.chip .q { font-family: var(--quran-font); }
 .chip.roots { background: var(--chip-roots); }
 
 .foot {

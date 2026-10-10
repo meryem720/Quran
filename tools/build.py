@@ -68,6 +68,7 @@ def normalize(text):
 def parse_morphology(path):
     """يرجع قائمة الآيات مرتبة: كل آية فيها كلماتها مع الجذر واللمّة."""
     verses = {}
+    questions = set()  # الآيات التي فيها أداة استفهام
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.rstrip("\n")
@@ -75,6 +76,8 @@ def parse_morphology(path):
                 continue
             loc, form, _pos, tags = line.split("\t")
             s, a, w, _seg = (int(x) for x in loc.split(":"))
+            if "INTG" in tags.split("|"):
+                questions.add((s, a))
             words = verses.setdefault((s, a), {})
             word = words.setdefault(w, {"text": "", "root": None, "lemma": None})
             word["text"] += form
@@ -92,6 +95,7 @@ def parse_morphology(path):
         result.append({
             "s": s,
             "a": a,
+            "question": (s, a) in questions,
             "words": [
                 {"text": words[w]["text"], "root": words[w]["root"], "lemma": words[w]["lemma"]}
                 for w in sorted(words)
@@ -255,7 +259,36 @@ QUESTION_MAX_WORDS = 12
 CONTEXT_ADRAKA = 1    # جواب ﴿وما أدراك﴾
 CONTEXT_RELATIVE = 2  # صفة متصلة بالآية السابقة
 CONTEXT_QUESTION = 3  # جواب ﴿هل أتاك / هل أنبئكم / هل أدلكم﴾
+CONTEXT_DIALOGUE = 4  # سؤال قصير يُجاب عنه في الآية التالية
+CONTEXT_ANSWER_ELSEWHERE = 5  # العبارة نفسها سُئل عنها في موضع آخر وأُجيب
+_ANSWER_TYPES = (CONTEXT_ADRAKA, CONTEXT_QUESTION, CONTEXT_DIALOGUE)
+SHORT_QUESTION_WORDS = 5
+_ANSWER_START = ("قال", "قالوا", "قل", "قالت")
 _RELATIVE_START = ("الذين", "الذي", "التي", "اللذين")
+
+
+def _answers(question, answer):
+    """هل الآية التالية جواب للسؤال القصير؟
+
+    - حوار: تبدأ بـ﴿قال/قالوا/قل﴾، مثل ﴿وما تلك بيمينك يا موسى ۝ قال هي عصاي﴾.
+    - أو يتكرر لفظ السؤال في أولها، مثل ﴿لأي يوم أجلت ۝ ليوم الفصل﴾
+      و﴿من أي شيء خلقه ۝ من نطفة خلقه﴾ و﴿عم يتساءلون ۝ عن النبإ العظيم﴾.
+    """
+    q_tokens = [normalize(w["text"]) for w in question["words"]]
+    first = answer["words"][0]
+    first_token = normalize(first["text"])
+    if first_token in _ANSWER_START:
+        # ﴿قل أفلا تذكرون ۝ قل من رب السماوات﴾ سؤال يتبعه سؤال، لا جواب
+        return not (first_token == "قل" and "قل" in q_tokens)
+    if q_tokens[0] == "عم":
+        return first_token == "عن"
+    # الجواب لا يبدأ بحرف عطف (العطف استمرار للكلام لا جواب)
+    if first_token[0] in "وف":
+        return False
+    if first_token == q_tokens[0]:
+        return True
+    q_roots = {w["root"] for w in question["words"] if w["root"]}
+    return first["root"] in q_roots
 
 
 def context_links(verses):
@@ -263,11 +296,17 @@ def context_links(verses):
 
     - ﴿وما أدراك ما ...﴾ يُجاب عنها في الآية التالية التي ليس فيها «أدراك».
     - الآية التي تبدأ بـ«الذين/الذي» تصف كلمة في آخر الآية السابقة.
+    - سؤال قصير يُجاب عنه في الآية التالية (انظر _answers).
     - ﴿هل أتاك حديث…﴾ و﴿هل أنبئكم…﴾ و﴿هل أدلكم…﴾ في آية قصيرة يُجاب عنها
       في الآية التالية (في الآية الطويلة يأتي الجواب غالبًا في الآية نفسها).
     """
     pos = {(v["s"], v["a"]): i for i, v in enumerate(verses)}
     links = defaultdict(dict)  # i -> {j: reason}
+    # اللوازم المتكررة (مثل ﴿فبأي آلاء ربكما تكذبان﴾) ليست أسئلة يُجاب عنها
+    flats = ["".join(normalize(w["text"]) for w in v["words"]) for v in verses]
+    repeats = defaultdict(int)
+    for f in flats:
+        repeats[f] += 1
 
     def add(i, j, reason):
         links[i][j] = reason
@@ -275,6 +314,11 @@ def context_links(verses):
 
     for i, v in enumerate(verses):
         flat = "".join(normalize(w["text"]) for w in v["words"])
+        nxt_i = pos.get((v["s"], v["a"] + 1))
+        if (v["question"] and len(v["words"]) <= SHORT_QUESTION_WORDS
+                and nxt_i is not None and not _ADRAKA.search(flat) and repeats[flat] < 3
+                and _answers(v, verses[nxt_i])):
+            add(i, nxt_i, CONTEXT_DIALOGUE)
         if _ADRAKA.search(flat):
             k = v["a"] + 1
             while (v["s"], k) in pos:
@@ -302,15 +346,36 @@ def shared_roots(vi, vj, idf, limit=3):
     return common[:limit]
 
 
+def _context_reason(i, j, context, elsewhere, best_phrase, verses):
+    if j in context.get(i, {}):
+        return context[i][j]
+    q = elsewhere[j][1]
+    return [CONTEXT_ANSWER_ELSEWHERE, verses[q]["s"], verses[q]["a"], best_phrase[i][q]]
+
+
 def build_related(verses):
     roots, idf = root_similarity(verses)
     phrases, best_phrase = phrase_similarity(verses)
     expressions, best_expr = expression_similarity(verses)
     context = context_links(verses)
+    # سؤال ← جوابه (الجواب بعد السؤال دائمًا)
+    answers = {
+        q: a for q, links in context.items() for a, code in links.items()
+        if code in _ANSWER_TYPES and a > q
+    }
 
     related = {}
     for i, v in enumerate(verses):
-        candidates = set(roots[i]) | set(phrases[i]) | set(expressions[i]) | set(context.get(i, {}))
+        # إذا وردت عبارة الآية (مثل ﴿يوم الدين﴾) في آية سُئل فيها عنها،
+        # فجواب ذلك السؤال يبيّن العبارة هنا أيضًا: ﴿مالك يوم الدين﴾ ← الانفطار 19
+        elsewhere = {}
+        for j, p in phrases[i].items():
+            a = answers.get(j)
+            if a is not None and a != i and a not in context.get(i, {}):
+                if p > elsewhere.get(a, (0, None))[0]:
+                    elsewhere[a] = (p, j)
+        candidates = (set(roots[i]) | set(phrases[i]) | set(expressions[i])
+                      | set(context.get(i, {})) | set(elsewhere))
         ranked = []
         for j in candidates:
             r = roots[i].get(j, 0.0)
@@ -318,6 +383,9 @@ def build_related(verses):
             # التعبير يُحسب فقط إذا لم تتطابق العبارة حرفيًا، حتى لا يُعدّ الشيء مرتين
             e = expressions[i].get(j, 0.0) if p == 0 else 0.0
             c = 1.0 if j in context.get(i, {}) else 0.0
+            if not c and j in elsewhere:
+                # بقدر تطابق العبارة مع آية السؤال
+                c = elsewhere[j][0]
             if r < MIN_ROOT_SCORE and p == 0 and e == 0 and c == 0:
                 continue
             score = (WEIGHTS["roots"] * r + WEIGHTS["phrase"] * p
@@ -326,7 +394,8 @@ def build_related(verses):
         ranked.sort(key=lambda t: (-t[0], t[1]))
 
         # صيغة مختصرة لتصغير الملف:
-        # [سورة، آية، الدرجة×100، رمز السياق، العبارة المشتركة، الجذور المشتركة، التعبير المشترك]
+        # [سورة، آية، الدرجة×100، سبب السياق، العبارة المشتركة، الجذور المشتركة، التعبير المشترك]
+        # سبب السياق: رمز، أو [5، سورة السؤال، آيته، العبارة] للجواب في موضع آخر
         items = []
         for score, j, r, p, e, c in ranked[:TOP_K]:
             u = verses[j]
@@ -335,7 +404,7 @@ def build_related(verses):
                 u["s"],
                 u["a"],
                 round(score * 100),
-                context[i][j] if c else 0,
+                _context_reason(i, j, context, elsewhere, best_phrase, verses) if c else 0,
                 best_phrase[i][j] if p else "",
                 " ".join(roots_list),
                 best_expr[i][j] if e else "",

@@ -5,6 +5,7 @@ const CONTEXT_REASONS = {
   1: "جواب ﴿وما أدراك﴾ في السياق",
   2: "صفة متصلة بالآية السابقة",
   3: "جواب الاستفهام في الآية التالية",
+  4: "جواب السؤال في الآية التالية",
 };
 const MAX_RESULTS = 200;
 
@@ -72,7 +73,13 @@ function renderVerse(s, a) {
   const top = items.length ? items[0][2] : 1;
   const relatedHtml = items.map(([rs, ra, score, ctx, phrase, roots, expression]) => {
     const chips = [];
-    if (ctx) chips.push(`<span class="chip context">${CONTEXT_REASONS[ctx]}</span>`);
+    if (Array.isArray(ctx)) {
+      // [5، سورة السؤال، آيته، العبارة]: العبارة نفسها سُئل عنها في موضع آخر وهذه الآية جوابها
+      const [, qs, qa, qPhrase] = ctx;
+      chips.push(`<span class="chip context">جواب ﴿<span class="q">${escapeHtml(qPhrase)}</span>﴾ في <a href="#${qs}:${qa}">${refLabel(qs, qa)}</a></span>`);
+    } else if (ctx) {
+      chips.push(`<span class="chip context">${CONTEXT_REASONS[ctx]}</span>`);
+    }
     if (phrase) chips.push(`<span class="chip phrase">عبارة مشتركة: <span class="q">${escapeHtml(phrase)}</span></span>`);
     if (expression) chips.push(`<span class="chip phrase">تعبير مشترك بصيغة أخرى: <span class="q">${escapeHtml(expression)}</span></span>`);
     if (roots) chips.push(`<span class="chip roots">جذور مشتركة: ${escapeHtml(roots.split(" ").join("، "))}</span>`);
