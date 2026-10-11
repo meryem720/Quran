@@ -48,6 +48,20 @@ python3 -m http.server -d web 8000   # العنوان: http://localhost:8000
 
 لا يحتاج إلا Python 3 (المكتبة القياسية فقط).
 
+### التشغيل على جهازك
+
+الكود على الفرع `claude/exciting-mayer-a0xbld`، فيلزم جلبه أولًا:
+
+```bash
+git clone https://github.com/meryem720/Quran.git
+cd Quran
+git checkout claude/exciting-mayer-a0xbld
+python3 -m http.server 8000 --directory web   # في ويندوز: python بدل python3
+```
+
+ثم يُفتح `http://localhost:8000` في المتصفح على الجهاز نفسه. لا يعمل فتح `index.html` مباشرة من المجلد
+(`file://`)، لأن المتصفح يمنع الصفحة من قراءة ملفات البيانات بهذه الطريقة.
+
 ## البحث بالموضوع
 
 يكتب المستخدم موضوعًا (الصلاة، الزكاة، الصبر، موسى) أو عبارة (يوم القيامة، بني إسرائيل) فيظهر:

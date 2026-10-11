@@ -27,6 +27,7 @@
     --chip-phrase: #22334a;
     --chip-roots: #352c48;
     --highlight: #5a4c12;
+    color-scheme: dark;
   }
 }
 
@@ -42,6 +43,7 @@
   --chip-phrase: #22334a;
   --chip-roots: #352c48;
   --highlight: #5a4c12;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -59,7 +61,7 @@ a:hover { text-decoration: underline; }
 
 .top {
   position: sticky;
-  top: 0;
+  top: env(safe-area-inset-top, 0px);
   z-index: 10;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
