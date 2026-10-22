@@ -33,6 +33,8 @@ const state = {
   topicMore: null,  // دالة «عرض المزيد» في صفحة الموضوع
   topicViews: new Map(), // عنوان صفحة الموضوع -> {عدد المعروض، موضع القراءة}
   verseIndex: new Map(), // "s:a" -> رقم الآية في فهرس الموضوعات
+  glosses: {},    // لمّة موحّدة -> {h: اللفظ في المعجم، d: [معانيه]} (مختار الصحاح)
+  lemmaText: new Map(), // لمّة موحّدة -> كتابتها بلا تشكيل، للألفاظ ذات الجذر
   lastScrollY: 0,
   navigatedByLink: false, // التنقل الحالي بنقر رابط (لا برجوع المتصفح)
 };
@@ -65,7 +67,11 @@ function verseHtml(s, a, { clickable = false, highlightRoot = null, highlightWor
         || (T.searchKey(highlightWord).length >= 3 && T.spellingKey(text).endsWith(T.searchKey(highlightWord)))));
     const cls = "word" + (hit ? " hit" : "");
     if (clickable && root) {
-      return `<span class="${cls}" tabindex="0" role="link" data-root="${escapeHtml(root)}" title="الجذر: ${escapeHtml(root)}">${escapeHtml(text)}</span>`;
+      const key = normalize(lemma);
+      const gloss = state.glosses[key];
+      const title = `الجذر: ${root}` + (gloss ? ` · ${gloss.h}: ${gloss.d.join("، ")}` : "");
+      return `<span class="${cls}" tabindex="0" role="link" data-root="${escapeHtml(root)}"${gloss
+        ? ` data-lemma="${escapeHtml(key)}"` : ""} title="${escapeHtml(title)}">${escapeHtml(text)}</span>`;
     }
     return hit ? `<span class="${cls}">${escapeHtml(text)}</span>` : escapeHtml(text);
   });
@@ -160,10 +166,10 @@ function renderVerse(s, a) {
   document.title = `${refLabel(s, a)} · تفسير القرآن بالقرآن`;
 }
 
-function renderList(title, matches, opts) {
+function renderList(title, matches, opts, before = "") {
   const shown = matches.slice(0, MAX_RESULTS);
   const more = matches.length > MAX_RESULTS ? ` (تُعرض أول ${MAX_RESULTS})` : "";
-  app.innerHTML = `
+  app.innerHTML = `${before}
     <h2>${title} <small>${matches.length} آية${more}</small></h2>
     ${shown.map(([s, a]) => `
       <article class="card related" data-href="#${s}:${a}" tabindex="0">
@@ -173,8 +179,29 @@ function renderList(title, matches, opts) {
   `;
 }
 
-function renderRoot(root) {
-  renderList(`مواضع الجذر «${escapeHtml(root)}»`, state.rootIndex.get(root) || [], { highlightRoot: root });
+// معنى اللفظ في المعجم: الاسم المعرَّف في التعريف («الجبل»، «الحيات») يفتح مواضعه في القرآن
+function glossHtml({ h, d }) {
+  const linkWords = (definition) => definition.split(" ").map((tok) => {
+    const k = normalize(tok);
+    const bare = k.startsWith("ال") && k.length > 3 ? k.slice(2) : null;
+    const key = bare && [bare, bare.endsWith("ات") ? bare.slice(0, -2) + "ه" : null].find((x) => state.lemmaText.has(x));
+    return key ? `<a href="#search/${encodeURIComponent(state.lemmaText.get(key))}">${escapeHtml(tok)}</a>` : escapeHtml(tok);
+  }).join(" ");
+  return `
+    <section class="card gloss">
+      <h2>﴿${escapeHtml(h)}﴾ في المعجم</h2>
+      <ul class="senses">${d.map((x) => `<li>${linkWords(x)}</li>`).join("")}</ul>
+      <p class="hint">من «مختار الصحاح» للرازي: معنى اللفظ في اللغة كما في المعجم، لا تفسير للآية،
+        وقد يذكر المعجم للفظ الواحد معاني عدة. الكلمة المسطّرة ترد في القرآن: انقر عليها لترى مواضعها.</p>
+    </section>`;
+}
+
+// #root/<جذر>[|<لمّة>]: مواضع الجذر، ومعنى اللفظ في المعجم إن كان من غريب القرآن
+function renderRoot(arg) {
+  const [root, lemma] = arg.split("|");
+  const gloss = lemma && state.glosses[lemma];
+  renderList(`مواضع الجذر «${escapeHtml(root)}»`, state.rootIndex.get(root) || [], { highlightRoot: root },
+    gloss ? glossHtml(gloss) : "");
   document.title = `الجذر ${root} · تفسير القرآن بالقرآن`;
 }
 
@@ -534,7 +561,7 @@ function setupControls() {
       return;
     }
     const word = e.target.closest("[data-root]");
-    if (word) { location.hash = `root/${word.dataset.root}`; return; }
+    if (word) { location.hash = `root/${word.dataset.root}${word.dataset.lemma ? "|" + word.dataset.lemma : ""}`; return; }
     if (e.target.closest("a")) return;
     const card = e.target.closest("[data-href]");
     if (card) location.hash = card.dataset.href;
@@ -566,6 +593,7 @@ function buildIndexes() {
         if (!state.rootIndex.has(r)) state.rootIndex.set(r, []);
         state.rootIndex.get(r).push([s, a]);
       });
+      words.forEach((w) => { if (w[1]) state.lemmaText.set(normalize(w[2]), T.plain(w[2])); });
       state.normWords.push([s, a, words.map((w) => normalize(w[0])), words.map((w) => normalize(w[2])),
         words.map((w) => T.spellingKey(w[0]))]);
     });
@@ -574,12 +602,15 @@ function buildIndexes() {
 
 async function init() {
   try {
-    const [quran, related] = await Promise.all([
+    const [quran, related, glosses] = await Promise.all([
       fetch("data/quran.json").then((r) => r.json()),
       fetch("data/related.json").then((r) => r.json()),
+      // معاني الألفاظ (tools/dictionary.py) اختيارية: يعمل التطبيق بدونها
+      fetch("data/glosses.json").then((r) => r.json()).catch(() => ({})),
     ]);
     state.surahs = quran.surahs;
     state.related = related;
+    state.glosses = glosses;
     state.topicIndex = T.buildIndex(quran);
     state.topicIndex.verses.forEach((v, i) => state.verseIndex.set(`${v.s}:${v.a}`, i));
     buildIndexes();

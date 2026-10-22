@@ -250,3 +250,9 @@ button.more {
   #search { width: 100%; }
   .controls, #search-form { width: 100%; }
 }
+
+/* ---------- معنى اللفظ في المعجم ---------- */
+
+.gloss h2 { margin-top: 0; font-family: var(--quran-font); font-weight: normal; font-size: 1.3rem; }
+.senses { margin: 4px 0; padding-inline-start: 20px; font-size: 1.1rem; }
+.senses a { text-decoration: underline; }

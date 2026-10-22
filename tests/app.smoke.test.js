@@ -52,6 +52,7 @@ for (const [name, hash, expect] of [
   ["موضوع واسع", topic("الله"), "الخلاصة"],
   ["موضوع غير موجود", topic("xyz"), "لم يُعثر"],
   ["جذر", "#root/" + encodeURIComponent("رحم"), "مواضع الجذر"],
+  ["معنى اللفظ في المعجم", "#root/" + encodeURIComponent("طور|طور"), "مختار الصحاح"],
   ["بحث حرفي", "#search/" + encodeURIComponent("الرحمن"), "نتائج البحث"],
 ]) {
   test(name, async () => {
