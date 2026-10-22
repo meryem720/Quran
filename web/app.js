@@ -13,6 +13,8 @@ const CONTEXT_REASONS = {
   9: "كلام متصل: ﴿أولئك﴾ في أول الثانية إشارة إلى من وُصفوا في الأولى",
   10: "كلام متصل: ﴿إذا﴾ في أول الثانية تصف حال ما في الأولى",
 };
+// [11، سورة المقطع المقابل، أول آية، آخر آية]: القصة نفسها في موضع آخر
+const PARALLEL = 11;
 const MAX_RESULTS = 200;
 const TOPIC_PAGE = 40;
 const SUGGESTED_TOPICS = [
@@ -70,11 +72,17 @@ function verseHtml(s, a, { clickable = false, highlightRoot = null, highlightWor
   return `<span class="quran">${parts.join(" ")} <span class="ayah-num">﴿${a}﴾</span></span>`;
 }
 
+function passageLink([, s, a1, a2]) {
+  return `<a href="#${s}:${a1}">${state.surahs[s - 1].name} ${a1}–${a2}</a>`;
+}
+
 // سبب الرابط بين آيتين: عنصر من related.json
 // [سورة، آية، الدرجة، السياق، العبارة المشتركة، الجذور المشتركة، التعبير المشترك، [اللفظ النادر، عدد آياته]]
 function reasonChips([, , , ctx, phrase, roots, expression, rare]) {
   const chips = [];
-  if (Array.isArray(ctx)) {
+  if (Array.isArray(ctx) && ctx[0] === PARALLEL) {
+    chips.push(`<span class="chip context">القصة نفسها في ${passageLink(ctx)}</span>`);
+  } else if (Array.isArray(ctx)) {
     // [5، سورة السؤال، آيته، العبارة]: العبارة نفسها سُئل عنها في موضع آخر وهذه الآية جوابها
     const [, qs, qa, qPhrase] = ctx;
     chips.push(`<span class="chip context">جواب ﴿<span class="q">${escapeHtml(qPhrase)}</span>﴾ في <a href="#${qs}:${qa}">${refLabel(qs, qa)}</a></span>`);
@@ -131,12 +139,19 @@ function renderVerse(s, a) {
       </article>`;
   }).join("");
 
+  // المواضع الأخرى التي قُصّت فيها القصة نفسها
+  const passages = [...new Map(items.filter(([, , , ctx]) => Array.isArray(ctx) && ctx[0] === PARALLEL)
+    .map(([, , , ctx]) => [ctx.join(":"), ctx])).values()];
+  const passagesHtml = passages.length
+    ? `<p class="hint">القصة نفسها في موضع آخر: ${passages.map(passageLink).join(" · ")}</p>` : "";
+
   app.innerHTML = `
     <section class="card main-verse">
       <div class="ref">سورة ${state.surahs[s - 1].name} · الآية ${a}</div>
       ${prev}
       ${verseHtml(s, a, { clickable: true })}
       ${next}
+      ${passagesHtml}
     </section>
     <div class="pager">${prevLink}${nextLink}</div>
     <h2>الآيات المفسِّرة <small>النقر على أي كلمة يعرض مواضع جذرها في القرآن</small></h2>

@@ -107,6 +107,17 @@ class RelatedTest(unittest.TestCase):
         # ﴿هل أتاك حديث ضيف إبراهيم﴾ لا يأخذ جواب ﴿هل أتاك حديث موسى﴾ لاشتراك الصيغة وحدها
         self.assertNotIn("79:16", self.ids("51:24"))
 
+    def test_parallel_story(self):
+        parallel = lambda ref: {k: x[3] for k, x in self.ids(ref).items()
+                                if isinstance(x[3], list) and x[3][0] == build.CONTEXT_PARALLEL}
+        # ﴿فتلقى آدم من ربه كلمات فتاب عليه﴾ ← ﴿ثم اجتباه ربه فتاب عليه وهدى﴾ في قصة آدم في طه
+        self.assertEqual(parallel("2:37")["20:122"], [build.CONTEXT_PARALLEL, 20, 116, 123])
+        # ﴿فأوجس في نفسه خيفة موسى﴾ ← ﴿وأوحينا إلى موسى أن ألق عصاك﴾ (الأعراف)
+        self.assertIn("7:117", parallel("20:67"))
+        # قصة نوح ثم قصة صالح تتتابعان في الأعراف وهود، فلا تتقابل آياتهما
+        self.assertNotIn("11:61", parallel("7:61"))
+        self.assertNotIn("7:77", parallel("11:32"))
+
     def test_rare_word_reason_is_listed(self):
         item = self.ids("15:87")["39:23"]
         self.assertEqual(build.normalize(item[7][0]), "المثاني")

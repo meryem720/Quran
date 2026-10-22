@@ -25,12 +25,23 @@ MORPH_FILE = os.path.join(ROOT_DIR, "data", "quran-morphology.txt")
 OUT_DIR = os.path.join(ROOT_DIR, "web", "data")
 
 TOP_K = 10
-WEIGHTS = {"roots": 1.0, "rare": 0.7, "phrase": 1.0, "expression": 1.0, "context": 2.0}
+WEIGHTS = {"roots": 1.0, "rare": 0.3, "phrase": 1.0, "expression": 1.0, "context": 2.0, "passage": 0.5}
 # الخصائص الشائعة جدًا (مثل «قول» و«الله») لا تميّز بين الآيات
 MAX_FEATURE_DF = 400
 MAX_NGRAM_DF = 40
 NGRAM_SIZES = (2, 3, 4)
 MIN_ROOT_SCORE = 0.08
+# المقاطع المتناظرة (انظر parallel_passages)
+PASSAGE_TAU = 0.6
+PASSAGE_GAP = 8
+PASSAGE_MIN = 3
+PASSAGE_DENSITY = 0.4
+PASSAGE_ORDER = 0.7
+PASSAGE_MARGIN = 1
+PASSAGE_WINDOW = 5
+PASSAGE_SUPPORT = 0.1
+PASSAGE_NAME_VERSES = 2
+PASSAGE_NAME_BACK = 20
 # اللفظ النادر: لا يرد إلا في هذا العدد من الآيات أو أقل
 RARE_DF = 3
 RARE_ROOT_DF = 60
@@ -342,6 +353,7 @@ CONTEXT_DIALOGUE = 4  # سؤال قصير يُجاب عنه في الآية ال
 CONTEXT_ANSWER_ELSEWHERE = 5  # العبارة نفسها سُئل عنها في موضع آخر وأُجيب
 # كلام متصل: الآية الثانية تبدأ بما لا يُبتدأ به (انظر _start_kind)
 CONTEXT_CONTINUATION = {"illa": 6, "gen": 7, "yawm": 8, "ulaika": 9, "idha": 10}
+CONTEXT_PARALLEL = 11  # [11، سورة المقطع المقابل، أول آية، آخر آية]: القصة نفسها في موضع آخر
 # لا يُنقل إلى المواضع الأخرى إلا جواب السؤال: أما الكلام المتصل فيصف موضعه وحده
 # (جُرّب نقله فكانت أكثر نتائجه من الفواصل المتكررة مثل ﴿على كل شيء قدير﴾)
 _ANSWER_TYPES = (CONTEXT_ADRAKA, CONTEXT_QUESTION, CONTEXT_DIALOGUE)
@@ -431,6 +443,127 @@ def context_links(verses):
     return links
 
 
+# ---------- المؤشر 5: المقاطع المتناظرة (القصة الواحدة في موضعين) ----------
+
+def _concordance(anchors):
+    """نسبة أزواج المراسي التي تحفظ الترتيب في الموضعين (القصة المعادة تحفظ ترتيب أحداثها)."""
+    good = bad = 0
+    for x in range(len(anchors)):
+        for y in range(x):
+            (i1, j1, _), (i2, j2, _) = anchors[y], anchors[x]
+            if i1 != i2 and j1 != j2:
+                if (i1 < i2) == (j1 < j2):
+                    good += 1
+                else:
+                    bad += 1
+    return good / (good + bad) if good + bad else 0.0
+
+
+def parallel_passages(verses, sim, candidates):
+    """القصة تُعاد في موضعين فيبيّن كل موضع الآخر.
+
+    1. المراسي: آيتان من سورتين مختلفتين متشابهتان جدًا (sim >= PASSAGE_TAU).
+    2. المقطع: مراسٍ متقاربة في السورتين معًا (لا يزيد ما بينها على PASSAGE_GAP آيات)،
+       فيها PASSAGE_MIN آيات مختلفة على الأقل في كل جانب، كثيفة في الجانب الأقصر،
+       ومحفوظة الترتيب، ولها صاحب واحد يُذكر اسمه في آيتين على الأقل من كل جانب:
+       قصة معادة لا موضوع متشابه (جُرّبت المقاطع بلا هذا الشرط فكان أكثرها أحكامًا
+       أو أوصافًا متشابهة لا تتقابل آياتها).
+    3. لكل آية في المقطع: أقرب ما يقابلها في الموضع الآخر بين المرسيين المحيطين بها،
+       من القصة نفسها. ﴿فتلقى آدم من ربه كلمات فتاب عليه﴾ (البقرة 37) يقابلها في قصة طه
+       ﴿ثم اجتباه ربه فتاب عليه وهدى﴾ (طه 122).
+    يرجع لكل آية {آية: (القوة، [سورة المقطع المقابل، أول آية، آخر آية])}.
+    """
+    n = len(verses)
+    names = [{normalize(w["lemma"]) for w in v["words"] if w["name"] and w["root"] != "أله"} for v in verses]
+
+    # صاحب القصة عند كل آية: آخر من ذُكر اسمه قبلها في السورة (قريبًا منها)
+    current = []
+    for k, v in enumerate(verses):
+        back = next((names[m] for m in range(k, max(k - PASSAGE_NAME_BACK, -1), -1)
+                     if verses[m]["s"] == v["s"] and names[m]), set())
+        current.append(back)
+
+    def protagonists(lo, hi):
+        """الأعلام المذكورة في آيتين من المقطع على الأقل: أصحاب القصة لا ذكر عابر."""
+        counts = defaultdict(int)
+        for k in range(lo, hi + 1):
+            for name in names[k]:
+                counts[name] += 1
+        return {name for name, c in counts.items() if c >= PASSAGE_NAME_VERSES}
+
+    pairs = defaultdict(list)  # (سورة، سورة) -> [(i, j, التشابه)]
+    for i in range(n):
+        for j in candidates(i):
+            if j > i and verses[i]["s"] != verses[j]["s"]:
+                x = sim(i, j)
+                if x >= PASSAGE_TAU:
+                    pairs[(verses[i]["s"], verses[j]["s"])].append((i, j, x))
+
+    links = defaultdict(dict)
+    for anchors in pairs.values():
+        # تجميع المراسي المتقاربة في الموضعين
+        parent = list(range(len(anchors)))
+
+        def find(k):
+            while parent[k] != k:
+                parent[k] = parent[parent[k]]
+                k = parent[k]
+            return k
+        for x in range(len(anchors)):
+            for y in range(x):
+                if (abs(anchors[x][0] - anchors[y][0]) <= PASSAGE_GAP
+                        and abs(anchors[x][1] - anchors[y][1]) <= PASSAGE_GAP):
+                    parent[find(x)] = find(y)
+        groups = defaultdict(list)
+        for k, a in enumerate(anchors):
+            groups[find(k)].append(a)
+
+        for group in groups.values():
+            side_a = sorted({a[0] for a in group})
+            side_b = sorted({a[1] for a in group})
+            span_a = side_a[-1] - side_a[0] + 1
+            span_b = side_b[-1] - side_b[0] + 1
+            density = len(side_a) / span_a if span_a <= span_b else len(side_b) / span_b
+            if (min(len(side_a), len(side_b)) < PASSAGE_MIN or density < PASSAGE_DENSITY
+                    or _concordance(sorted(group)) < PASSAGE_ORDER):
+                continue
+            # قصة لا موضوع: لها في الموضعين صاحب واحد (موسى، فرعون، آدم، إبليس، نوح…)
+            if not protagonists(side_a[0], side_a[-1]) & protagonists(side_b[0], side_b[-1]):
+                continue
+            side = (side_a, side_b)
+            for src, dst, lo_b, hi_b in ((0, 1, side_b[0], side_b[-1]), (1, 0, side_a[0], side_a[-1])):
+                marks = sorted((a[src], a[dst]) for a in group)
+                surah = verses[lo_b]["s"]
+                span = [surah, verses[lo_b]["a"], verses[hi_b]["a"]]
+                first, last = marks[0][0], marks[-1][0]
+                for k in range(first - PASSAGE_MARGIN, last + PASSAGE_MARGIN + 1):
+                    if not 0 <= k < n or verses[k]["s"] != verses[first]["s"]:
+                        continue
+                    before = [m for m in marks if m[0] <= k] or marks[:1]
+                    after = [m for m in marks if m[0] >= k] or marks[-1:]
+                    near = [before[-1][1], after[0][1]]
+                    lo = max(min(near) - PASSAGE_MARGIN, lo_b - PASSAGE_MARGIN)
+                    hi = min(max(near) + PASSAGE_MARGIN, hi_b + PASSAGE_MARGIN)
+                    window = [j for j in range(max(lo, 0), min(hi, n - 1) + 1) if verses[j]["s"] == surah]
+                    if not window:
+                        continue
+                    # المقابل من القصة نفسها: نوح ثم هود ثم صالح تتتابع في الأعراف وهود
+                    window = [j for j in window if current[k] & current[j]]
+                    if not window:
+                        continue
+                    best = max(window, key=lambda j: (sim(k, j), -abs(j - sum(near) / 2)))
+                    # بين مرسيين متباعدين لا يُخمَّن المقابل بلا لفظ يشهد له
+                    if len(window) > PASSAGE_WINDOW and sim(k, best) < PASSAGE_SUPPORT:
+                        continue
+                    strength = 0.5 + 0.5 * min(1.0, sim(k, best))
+                    # التقابل متبادل: كل من الآيتين تبيّن الأخرى
+                    back = [verses[k]["s"], verses[side[src][0]]["a"], verses[side[src][-1]]["a"]]
+                    for x, y, sp in ((k, best, span), (best, k, back)):
+                        if strength > links[x].get(y, (0,))[0]:
+                            links[x][y] = (strength, sp)
+    return links
+
+
 # ---------- الجمع بين المؤشرات ----------
 
 def shared_roots(vi, vj, idf, limit=3):
@@ -461,6 +594,17 @@ def build_related(verses):
     expressions, best_expr = expression_similarity(verses)
     context = context_links(verses)
     rare = rare_word_links(verses)
+
+    # التشابه اللفظي وحده (دون السياق)، تُبنى عليه المقاطع المتناظرة
+    def lexical(i, j):
+        p = phrases[i].get(j, 0.0)
+        e = expressions[i].get(j, 0.0) if p == 0 else 0.0
+        w = rare[i][j][0] if j in rare[i] else 0.0
+        return (WEIGHTS["roots"] * roots[i].get(j, 0.0) + WEIGHTS["rare"] * w
+                + WEIGHTS["phrase"] * p + WEIGHTS["expression"] * e)
+
+    passages = parallel_passages(
+        verses, lexical, lambda i: set(roots[i]) | set(phrases[i]) | set(expressions[i]) | set(rare[i]))
     # سؤال ← جوابه (الجواب بعد السؤال دائمًا)
     answers = {
         q: a for q, links in context.items() for a, code in links.items()
@@ -490,7 +634,7 @@ def build_related(verses):
                 if p > elsewhere.get(a, (0, None))[0]:
                     elsewhere[a] = (p, j)
         candidates = (set(roots[i]) | set(phrases[i]) | set(expressions[i])
-                      | set(context.get(i, {})) | set(elsewhere) | set(rare[i]))
+                      | set(context.get(i, {})) | set(elsewhere) | set(rare[i]) | set(passages[i]))
         ranked = []
         for j in candidates:
             r = roots[i].get(j, 0.0)
@@ -502,11 +646,12 @@ def build_related(verses):
             if not c and j in elsewhere:
                 # بقدر تطابق العبارة مع آية السؤال
                 c = elsewhere[j][0]
-            if r < MIN_ROOT_SCORE and p == 0 and e == 0 and c == 0 and w == 0:
+            m = passages[i][j][0] if j in passages[i] else 0.0
+            if r < MIN_ROOT_SCORE and p == 0 and e == 0 and c == 0 and w == 0 and m == 0:
                 continue
             score = (WEIGHTS["roots"] * r + WEIGHTS["rare"] * w + WEIGHTS["phrase"] * p
-                     + WEIGHTS["expression"] * e + WEIGHTS["context"] * c)
-            ranked.append((score, j, r, p, e, c, w))
+                     + WEIGHTS["expression"] * e + WEIGHTS["context"] * c + WEIGHTS["passage"] * m)
+            ranked.append((score, j, r, p, e, c, w, m))
         ranked.sort(key=lambda t: (-t[0], t[1]))
 
         # صيغة مختصرة لتصغير الملف:
@@ -514,14 +659,15 @@ def build_related(verses):
         #  (، [اللفظ النادر، عدد آياته])]
         # سبب السياق: رمز، أو [5، سورة السؤال، آيته، العبارة] للجواب في موضع آخر
         items = []
-        for score, j, r, p, e, c, w in ranked[:TOP_K]:
+        for score, j, r, p, e, c, w, m in ranked[:TOP_K]:
             u = verses[j]
             roots_list = shared_roots(v, u, idf) if r >= MIN_ROOT_SCORE else []
             items.append([
                 u["s"],
                 u["a"],
                 round(score * 100),
-                _context_reason(i, j, context, elsewhere, best_phrase, verses) if c else 0,
+                (_context_reason(i, j, context, elsewhere, best_phrase, verses) if c
+                 else [CONTEXT_PARALLEL, *passages[i][j][1]] if m else 0),
                 best_phrase[i][j] if p else "",
                 " ".join(roots_list),
                 best_expr[i][j] if e else "",
