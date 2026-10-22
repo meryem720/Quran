@@ -6,6 +6,12 @@ const CONTEXT_REASONS = {
   2: "تبدأ بـ﴿الذين﴾ فتتصل بالآية السابقة غالبًا",
   3: "جواب الاستفهام في الآية التالية",
   4: "جواب السؤال في الآية التالية",
+  // كلام متصل: الآية الثانية تبدأ بما لا يُبتدأ به كلام جديد
+  6: "كلام متصل: ﴿إلا﴾ في أول الثانية استثناء من الأولى",
+  7: "كلام متصل: الثانية تبدأ باسم مجرور، فهو صفة أو بدل مما في الأولى",
+  8: "كلام متصل: الثانية تبدأ بـ﴿يوم﴾ أو ﴿يومئذ﴾ فتبيّن وقت ما في الأولى",
+  9: "كلام متصل: ﴿أولئك﴾ في أول الثانية إشارة إلى من وُصفوا في الأولى",
+  10: "كلام متصل: ﴿إذا﴾ في أول الثانية تصف حال ما في الأولى",
 };
 const MAX_RESULTS = 200;
 const TOPIC_PAGE = 40;
@@ -65,8 +71,8 @@ function verseHtml(s, a, { clickable = false, highlightRoot = null, highlightWor
 }
 
 // سبب الرابط بين آيتين: عنصر من related.json
-// [سورة، آية، الدرجة، السياق، العبارة المشتركة، الجذور المشتركة، التعبير المشترك]
-function reasonChips([, , , ctx, phrase, roots, expression]) {
+// [سورة، آية، الدرجة، السياق، العبارة المشتركة، الجذور المشتركة، التعبير المشترك، [اللفظ النادر، عدد آياته]]
+function reasonChips([, , , ctx, phrase, roots, expression, rare]) {
   const chips = [];
   if (Array.isArray(ctx)) {
     // [5، سورة السؤال، آيته، العبارة]: العبارة نفسها سُئل عنها في موضع آخر وهذه الآية جوابها
@@ -77,7 +83,18 @@ function reasonChips([, , , ctx, phrase, roots, expression]) {
   }
   if (phrase) chips.push(`<span class="chip phrase">عبارة مشتركة: <span class="q">${escapeHtml(phrase)}</span></span>`);
   if (expression) chips.push(`<span class="chip phrase">تعبير مشترك بصيغة أخرى: <span class="q">${escapeHtml(expression)}</span></span>`);
-  if (roots) chips.push(`<span class="chip roots">جذور مشتركة: ${escapeHtml(roots.split(" ").join("، "))}</span>`);
+  if (rare) {
+    const [word, count] = rare;
+    chips.push(`<span class="chip phrase">لفظ نادر: ﴿<span class="q">${escapeHtml(word)}</span>﴾ لا يرد إلا في ${T.countAr(count, "ayah")}</span>`);
+  }
+  if (roots) {
+    // أسماء الأعلام (إبراهيم، فرعون…) لا جذر لها، فتُعرض وحدها
+    const terms = roots.split(" ");
+    const rootTerms = terms.filter((x) => state.rootIndex.has(x));
+    const names = terms.filter((x) => !state.rootIndex.has(x));
+    if (rootTerms.length) chips.push(`<span class="chip roots">جذور مشتركة: ${escapeHtml(rootTerms.join("، "))}</span>`);
+    if (names.length) chips.push(`<span class="chip roots">أعلام مشتركة: ${escapeHtml(names.join("، "))}</span>`);
+  }
   return chips.join("");
 }
 
