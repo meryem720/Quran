@@ -110,9 +110,14 @@ def _start_kind(segments):
     - "ulaika": ﴿أولئك﴾ إشارة إلى من وُصفوا قبلها: ﴿والسابقون السابقون ۝ أولئك المقربون﴾.
     - "idha": ﴿إذا﴾ بلا عطف تصف حال ما قبلها: ﴿خلق هلوعا ۝ إذا مسه الشر جزوعا﴾.
     - "bala": ﴿بلى﴾ جواب ما نُفي قبلها: ﴿أيحسب الإنسان ألن نجمع عظامه ۝ بلى قادرين﴾.
+    - "faman": ﴿فمن﴾ تفريع على حكم ما قبلها أو خبره: ﴿فاقطعوا أيديهما ۝ فمن تاب من بعد ظلمه﴾،
+      ﴿ليروا أعمالهم ۝ فمن يعمل مثقال ذرة خيرا يره﴾ (صحيح في مواضعه الثمانية عشر).
     """
     prefixes = [tags for _, tags in segments if "PREF" in tags]
     stems = [(pos, tags) for pos, tags in segments if "PREF" not in tags and "SUFF" not in tags]
+    if (stems and len(prefixes) == 1 and "LEM:ف" in prefixes[0] and "LEM:مَن" in stems[0][1]
+            and {"COND", "REL", "INTG"} & set(stems[0][1])):
+        return "faman"
     if not stems or any("DET" not in tags for tags in prefixes):
         return None  # تبدأ بحرف عطف أو جر: كلام جديد أو معطوف
     pos, tags = stems[0]
@@ -270,14 +275,21 @@ def clause_similarity(verses, clauses, idf):
     تشابه جملتين = جيب التمام × نسبة ما تشتركان فيه من ندرة الألفاظ (idf لكل لفظ مرة، دون ألفاظ
     الفواصل) إلى CLAUSE_INFO، فلا تكفي كلمة واحدة شائعة ولا ﴿سميع عليم﴾. والجملة الأخيرة التي تشبه
     خواتيم آيات كثيرة صيغة ختام (﴿ومن كفر فإن الله غني عن العالمين﴾) لا يُبنى عليها.
+    والجملة التي كل ألفاظها من أسماء الفواصل (﴿والله عزيز حكيم﴾) صيغة ختام كذلك.
     تُحفظ لكل جملة أفضل CLAUSE_KEEP آيات، فلكل جملة نصيبها.
     يرجع ([لكل آية {آية: (التشابه، رقم الجملة فيها، رقم الجملة في الأخرى)}]، [لكل آية جملها الصيغ]).
     """
     fasila = fasila_lemmas(verses)
     units = []  # (رقم الآية، رقم الجملة، المتجه بعد التطبيع)
+    formulas = defaultdict(set)
     for i, v in enumerate(verses):
         for c, (start, end) in enumerate(clauses[i]):
             feats = root_features({"words": v["words"][start:end]})
+            specific = [k for k in feats if k.startswith("L:") and idf[k] >= MIN_CLAUSE_IDF]
+            # جملة كل ألفاظها من أسماء الفواصل (﴿والله عزيز حكيم﴾): صيغة ختام لا بيان
+            if len(clauses[i]) > 1 and specific and all(k in fasila for k in specific):
+                formulas[i].add(c)
+                continue
             # ﴿قل العفو﴾: لفظ واحد ذو معنى بعد «قال» الشائعة، لا يكفي لمقارنة الجملة وحدها
             if sum(1 for k in feats if k.startswith("L:") and idf[k] >= MIN_CLAUSE_IDF) < CLAUSE_MIN_WORDS:
                 continue
@@ -310,7 +322,6 @@ def clause_similarity(verses, clauses, idf):
         matches.append(found)
 
     best = defaultdict(dict)
-    formulas = defaultdict(set)
     for (i, c, _), found in zip(units, matches):
         # جملة أخيرة تشبه بقوة خواتيم آيات كثيرة: صيغة ختام (﴿كذلك يبين الله لكم الآيات﴾).
         # أما الجملة المتكررة في أول الآية أو وسطها فتعليم يكرره القرآن (﴿لا أملك لنفسي ضرا ولا نفعا﴾)
@@ -468,7 +479,7 @@ CONTEXT_QUESTION = 3  # جواب ﴿هل أتاك / هل أنبئكم / هل أ�
 CONTEXT_DIALOGUE = 4  # سؤال قصير يُجاب عنه في الآية التالية
 CONTEXT_ANSWER_ELSEWHERE = 5  # العبارة نفسها سُئل عنها في موضع آخر وأُجيب
 # كلام متصل: الآية الثانية تبدأ بما لا يُبتدأ به (انظر _start_kind)
-CONTEXT_CONTINUATION = {"illa": 6, "gen": 7, "yawm": 8, "ulaika": 9, "idha": 10, "bala": 12}
+CONTEXT_CONTINUATION = {"illa": 6, "gen": 7, "yawm": 8, "ulaika": 9, "idha": 10, "bala": 12, "faman": 13}
 CONTEXT_PARALLEL = 11  # [11، سورة المقطع المقابل، أول آية، آخر آية]: القصة نفسها في موضع آخر
 # لا يُنقل إلى المواضع الأخرى إلا جواب السؤال: أما الكلام المتصل فيصف موضعه وحده
 # (جُرّب نقله فكانت أكثر نتائجه من الفواصل المتكررة مثل ﴿على كل شيء قدير﴾)
@@ -512,8 +523,8 @@ def context_links(verses):
     - سؤال قصير يُجاب عنه في الآية التالية (انظر _answers).
     - ﴿هل أتاك حديث…﴾ و﴿هل أنبئكم…﴾ و﴿هل أدلكم…﴾ في آية قصيرة يُجاب عنها
       في الآية التالية (في الآية الطويلة يأتي الجواب غالبًا في الآية نفسها).
-    - كلام متصل: الآية التي تبدأ بـ﴿إلا﴾ أو ﴿يوم﴾ أو ﴿أولئك﴾ أو ﴿إذا﴾ أو ﴿بلى﴾ أو باسم مجرور
-      تتمة للآية السابقة.
+    - كلام متصل: الآية التي تبدأ بـ﴿إلا﴾ أو ﴿يوم﴾ أو ﴿أولئك﴾ أو ﴿إذا﴾ أو ﴿بلى﴾ أو ﴿فمن﴾ أو باسم
+      مجرور تتمة للآية السابقة.
     """
     pos = {(v["s"], v["a"]): i for i, v in enumerate(verses)}
     links = defaultdict(dict)  # i -> {j: reason}
@@ -799,7 +810,8 @@ def build_related(verses):
             chosen, covered = [], defaultdict(int)
             for t in ranked[:CLAUSE_POOL]:
                 c = explained_clause(i, t[1])
-                if c is not None and covered[c] < CLAUSE_PER and t[0] >= CLAUSE_FAIR * ranked[0][0]:
+                if (c is not None and c not in formula_clauses[i] and covered[c] < CLAUSE_PER
+                        and t[0] >= CLAUSE_FAIR * ranked[0][0]):
                     covered[c] += 1
                     chosen.append(t)
             chosen = chosen[:TOP_K]

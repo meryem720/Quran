@@ -67,6 +67,9 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(links[i[(70, 19)]][i[(70, 20)]], kinds["idha"])
         # ﴿أيحسب الإنسان ألن نجمع عظامه ۝ بلى قادرين على أن نسوي بنانه﴾
         self.assertEqual(links[i[(75, 3)]][i[(75, 4)]], kinds["bala"])
+        # ﴿فاقطعوا أيديهما… ۝ فمن تاب من بعد ظلمه وأصلح﴾، و«ومن» عطف لا تفريع (البقرة 114)
+        self.assertEqual(links[i[(5, 38)]][i[(5, 39)]], kinds["faman"])
+        self.assertIsNone(self.verses[i[(2, 114)]]["start"])
         # الآية التي تبدأ بحرف عطف أو جر كلام جديد: ﴿والذين يؤمنون بما أنزل إليك﴾، ﴿في جنات النعيم﴾
         self.assertNotIn(i[(2, 4)], links.get(i[(2, 3)], {}))
         self.assertNotIn(i[(56, 12)], links.get(i[(56, 11)], {}))
@@ -120,6 +123,14 @@ class RelatedTest(unittest.TestCase):
         self.assertNotIn("11:61", parallel("7:61"))
         self.assertNotIn("7:77", parallel("11:32"))
 
+    def test_theft_verse_is_explained_by_its_ruling(self):
+        items = self.related["5:38"]
+        # أول بيان: الآية التالية ﴿فمن تاب من بعد ظلمه﴾ (كلام متصل)
+        self.assertEqual(items[0][:2], [5, 39])
+        self.assertEqual(items[0][3], build.CONTEXT_CONTINUATION["faman"])
+        # لا رابط يبيّن الخاتمة ﴿والله عزيز حكيم﴾ وحدها
+        self.assertFalse([x for x in items if len(x) > 8 and x[8] == 1])
+
     def test_rare_word_reason_is_listed(self):
         item = self.ids("15:87")["39:23"]
         self.assertEqual(build.normalize(item[7][0]), "المثاني")
@@ -164,3 +175,5 @@ class ClauseTest(unittest.TestCase):
         self.assertEqual(by_clause[i[(2, 255)]][i[(34, 23)]][1], 3)
         # ﴿كذلك يبين الله لكم الآيات لعلكم تتفكرون﴾ صيغة ختام في البقرة 219
         self.assertIn(len(self.clauses[i[(2, 219)]]) - 1, formulas[i[(2, 219)]])
+        # ﴿والله عزيز حكيم﴾ كل ألفاظها من أسماء الفواصل: صيغة ختام في المائدة 38
+        self.assertIn(1, formulas[i[(5, 38)]])
