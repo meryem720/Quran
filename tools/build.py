@@ -67,6 +67,11 @@ RARE_DF = 3
 RARE_ROOT_DF = 60
 # أقصى مسافة بين كلمتي التعبير: ﴿أنعمتَ عليهم﴾ و﴿أنعم اللهُ عليهم﴾
 EXPRESSION_GAP = 2
+# أزواج الجذور المتجاورة بأي ترتيب (انظر root_pair_similarity)
+ROOTPAIR_GAP = 3        # حتى كلمتين بين الجذرين
+ROOTPAIR_WEIGHT = 0.3
+ROOTPAIR_ADD = True     # True: يُضاف دائمًا، False: فقط إذا لم تتطابق العبارة ولا التعبير
+ROOTPAIR_MAX_DF = 5     # لا يُعدّ إلا زوج نادر جدًا (جُرّب حتى 40 آية فأدخل ضجيجًا ونقص بعض الأمثلة)
 
 SURAH_NAMES = [
     "الفاتحة", "البقرة", "آل عمران", "النساء", "المائدة", "الأنعام", "الأعراف",
@@ -138,11 +143,19 @@ def _start_kind(segments):
     return None
 
 
+def _fa_past_third(segments):
+    if len(segments) < 2 or "LEM:ف" not in segments[0][1] or "PREF" not in segments[0][1]:
+        return False
+    pos, tags = segments[1]
+    return pos == "V" and "PERF" in tags and any(t.startswith("3") for t in tags)
+
+
 def parse_morphology(path):
     """يرجع قائمة الآيات مرتبة: كل آية فيها كلماتها مع الجذر واللمّة."""
     verses = {}
     questions = set()  # الآيات التي فيها أداة استفهام
     first_word = defaultdict(list)  # (سورة، آية) -> أجزاء الكلمة الأولى [(نوعها، وسومها)]
+    third_person = set()  # آيات فيها ضمير غائب متصل
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.rstrip("\n")
@@ -154,10 +167,16 @@ def parse_morphology(path):
                 questions.add((s, a))
             if w == 1:
                 first_word[(s, a)].append((pos_tag, tags.split("|")))
+            parts_ = tags.split("|")
+            if pos_tag == "N" and "PRON" in parts_ and "SUFF" in parts_ and any(t.startswith("3") for t in parts_):
+                third_person.add((s, a))
             words = verses.setdefault((s, a), {})
-            word = words.setdefault(w, {"text": "", "root": None, "lemma": None, "name": False, "verb": False})
+            word = words.setdefault(w, {"text": "", "root": None, "lemma": None, "name": False, "verb": False,
+                                        "conj": False})
             word["text"] += form
             parts = tags.split("|")
+            if _seg == 1 and "PREF" in parts and ("LEM:و" in parts or "LEM:ف" in parts):
+                word["conj"] = True  # واو أو فاء ملتصقة في أول الكلمة: ﴿والله﴾، ﴿فاقطعوا﴾
             if "PN" in parts:
                 word["name"] = True  # اسم علم: موسى، فرعون، مكة…
             root = next((t[5:] for t in parts if t.startswith("ROOT:")), None)
@@ -176,8 +195,10 @@ def parse_morphology(path):
             "a": a,
             "question": (s, a) in questions,
             "start": _start_kind(first_word[(s, a)]),
+            # قصّ متتابع: فاء ثم فعل ماضٍ لغائب، وفي الآية ضمير غائب (﴿قالت نملة… ۝ فتبسم ضاحكا من قولها﴾)
+            "narrative": (s, a) in third_person and _fa_past_third(first_word[(s, a)]),
             "words": [
-                {k: words[w][k] for k in ("text", "root", "lemma", "name", "verb")}
+                {k: words[w][k] for k in ("text", "root", "lemma", "name", "verb", "conj")}
                 for w in sorted(words)
             ],
         })
@@ -370,14 +391,21 @@ def rare_word_links(verses):
 
 # ---------- المؤشر 2: العبارات المتطابقة ----------
 
+def _bare(word):
+    """الكلمة موحّدة دون حرف العطف أو الاستئناف الملتصق بها (من وسوم الصرف لا من الحرف الأول)."""
+    token = normalize(word["text"])
+    return token[1:] if word.get("conj") and len(token) > 1 else token
+
+
 def ngrams(tokens, size):
     return [(k, " ".join(tokens[k:k + size])) for k in range(len(tokens) - size + 1)]
 
 
 def phrase_similarity(verses):
-    """يجد العبارات (2 إلى 4 كلمات) المشتركة بين الآيات، والنادرة أهم."""
+    """يجد العبارات (2 إلى 4 كلمات) المشتركة بين الآيات، والنادرة أهم.
+    تُقارن الكلمات دون الواو والفاء الملتصقتين بأولها، فتتطابق ﴿إن الله لا يستحيي﴾ و﴿والله لا يستحيي﴾."""
     n = len(verses)
-    tokens = [[normalize(w["text"]) for w in v["words"]] for v in verses]
+    tokens = [[_bare(w) for w in v["words"]] for v in verses]
     content = [[_content(w) for w in v["words"]] for v in verses]
     index = defaultdict(set)
     for i, toks in enumerate(tokens):
@@ -420,6 +448,48 @@ def phrase_similarity(verses):
 
 def _lemma(word):
     return normalize(word["lemma"] or word["text"])
+
+
+def root_pair_similarity(verses):
+    """جذران متجاوران (بينهما كلمتان على الأكثر) بأي ترتيب وبأي صيغة: ﴿كلمة طيبة﴾ و﴿الكلم الطيب﴾،
+    ﴿وأوحى ربك﴾ و﴿ربك أوحى﴾. اسم العلم بلا جذر يُعدّ بلمّته. الزوج النادر أهم."""
+    n = len(verses)
+
+    def key_of(w):
+        return w["root"] or (normalize(w["lemma"]) if _content(w) and w["lemma"] else None)
+
+    pairs, index = [], defaultdict(set)
+    for i, v in enumerate(verses):
+        ws = v["words"]
+        found = {}
+        for a in range(len(ws)):
+            ka = key_of(ws[a])
+            for b in range(a + 1, min(len(ws), a + ROOTPAIR_GAP + 1)):
+                kb = key_of(ws[b])
+                if ka and kb and ka != kb:
+                    found.setdefault(tuple(sorted((ka, kb))), (a, b))
+        pairs.append(found)
+        for key in found:
+            index[key].add(i)
+    scores, best_pair = [], []
+    for i, found in enumerate(pairs):
+        acc = defaultdict(float)
+        best = {}
+        for key, (a, b) in found.items():
+            ids = index[key]
+            if len(ids) > ROOTPAIR_MAX_DF:
+                continue
+            weight = math.log(n / len(ids))
+            for j in ids:
+                if j != i:
+                    acc[j] += weight
+                    if j not in best or best[j][0] < weight:
+                        best[j] = (weight, a, b)
+        words = verses[i]["words"]
+        scores.append({j: x / (x + 20.0) for j, x in acc.items()})
+        best_pair.append({j: words[a]["text"] + (" " if b == a + 1 else " … ") + words[b]["text"]
+                          for j, (_, a, b) in best.items()})
+    return scores, best_pair
 
 
 def expression_similarity(verses):
@@ -480,6 +550,16 @@ CONTEXT_DIALOGUE = 4  # سؤال قصير يُجاب عنه في الآية ال
 CONTEXT_ANSWER_ELSEWHERE = 5  # العبارة نفسها سُئل عنها في موضع آخر وأُجيب
 # كلام متصل: الآية الثانية تبدأ بما لا يُبتدأ به (انظر _start_kind)
 CONTEXT_CONTINUATION = {"illa": 6, "gen": 7, "yawm": 8, "ulaika": 9, "idha": 10, "bala": 12, "faman": 13}
+# ﴿خير/شر من ذلك(م)﴾ مفاضلة تشير إلى ما في الآية السابقة (آل عمران 15، المائدة 60، الحج 72)
+CONTEXT_COMPARISON = 14
+_COMPARISON = re.compile("(خير|شر)منذلك")
+# الآية بعد آية ﴿يسألونك﴾ تشترك معها في جذر غير شائع: تتمة الجواب (﴿ويسألونك عن المحيض﴾ ← ﴿نساؤكم حرث لكم﴾)
+CONTEXT_ASKED = 15
+# القصّ المتتابع: كثير في القرآن، فيُعطى جزءًا صغيرًا من وزن السياق
+CONTEXT_NARRATIVE = 16
+NARRATIVE_SHARE = 0.5
+_ASKED = ("يسلونك", "ويسلونك")
+ASKED_ROOT_DF = 400
 CONTEXT_PARALLEL = 11  # [11، سورة المقطع المقابل، أول آية، آخر آية]: القصة نفسها في موضع آخر
 # لا يُنقل إلى المواضع الأخرى إلا جواب السؤال: أما الكلام المتصل فيصف موضعه وحده
 # (جُرّب نقله فكانت أكثر نتائجه من الفواصل المتكررة مثل ﴿على كل شيء قدير﴾)
@@ -528,6 +608,11 @@ def context_links(verses):
     """
     pos = {(v["s"], v["a"]): i for i, v in enumerate(verses)}
     links = defaultdict(dict)  # i -> {j: reason}
+    root_verses = defaultdict(set)
+    for i, v in enumerate(verses):
+        for w in v["words"]:
+            if w["root"]:
+                root_verses[w["root"]].add(i)
     # اللوازم المتكررة (مثل ﴿فبأي آلاء ربكما تكذبان﴾) ليست أسئلة يُجاب عنها
     flats = ["".join(normalize(w["text"]) for w in v["words"]) for v in verses]
     repeats = defaultdict(int)
@@ -568,6 +653,16 @@ def context_links(verses):
         elif v.get("start") and i not in links[prev_i]:
             # لا يحل محل سبب أدق: ﴿هل أتاك حديث الجنود ۝ فرعون وثمود﴾ جواب قبل أن يكون بدلًا
             add(prev_i, i, CONTEXT_CONTINUATION[v["start"]])
+        if (ASKED_ROOT_DF and normalize(verses[prev_i]["words"][0]["text"]) in _ASKED and i not in links[prev_i]
+                and any(len(root_verses[r]) <= ASKED_ROOT_DF for r in
+                        {w["root"] for w in verses[prev_i]["words"] if w["root"]}
+                        & {w["root"] for w in v["words"] if w["root"]})):
+            add(prev_i, i, CONTEXT_ASKED)
+        if _COMPARISON.search(flat) and i not in links[prev_i]:
+            # ﴿زين للناس حب الشهوات… ۝ قل أؤنبئكم بخير من ذلكم﴾
+            add(prev_i, i, CONTEXT_COMPARISON)
+        if NARRATIVE_SHARE and v.get("narrative") and i not in links[prev_i]:
+            add(prev_i, i, CONTEXT_NARRATIVE)
     return links
 
 
@@ -722,6 +817,7 @@ def build_related(verses):
     by_clause, formula_clauses = clause_similarity(verses, clauses, idf)
     phrases, best_phrase = phrase_similarity(verses)
     expressions, best_expr = expression_similarity(verses)
+    root_pairs, best_root_pair = root_pair_similarity(verses)
     context = context_links(verses)
     rare = rare_word_links(verses)
 
@@ -782,7 +878,7 @@ def build_related(verses):
                     elsewhere[a] = (p, j)
         candidates = (set(roots[i]) | set(phrases[i]) | set(expressions[i])
                       | set(context.get(i, {})) | set(elsewhere) | set(rare[i]) | set(passages[i])
-                      | set(by_clause[i]))
+                      | set(by_clause[i]) | set(root_pairs[i]))
         ranked = []
         for j in candidates:
             # تشابه الآيتين كاملتين، أو جملة من هذه بجملة من تلك إن كان أقوى
@@ -791,18 +887,23 @@ def build_related(verses):
             p = phrases[i].get(j, 0.0)
             # التعبير يُحسب فقط إذا لم تتطابق العبارة حرفيًا، حتى لا يُعدّ الشيء مرتين
             e = expressions[i].get(j, 0.0) if p == 0 else 0.0
-            c = 1.0 if j in context.get(i, {}) else 0.0
+            # الجذران المتجاوران: إضافة لما لم تلتقطه العبارة ولا التعبير (أو دائمًا إن ROOTPAIR_ADD)
+            q = root_pairs[i].get(j, 0.0) if ROOTPAIR_ADD or not (p or e) else 0.0
+            c = 0.0
+            if j in context.get(i, {}):
+                c = NARRATIVE_SHARE if context[i][j] == CONTEXT_NARRATIVE else 1.0
             if not c and j in elsewhere:
                 # بقدر تطابق العبارة مع آية السؤال
                 c = elsewhere[j][0]
             m = passages[i][j][0] if j in passages[i] else 0.0
-            if r < MIN_ROOT_SCORE and p == 0 and e == 0 and c == 0 and w == 0 and m == 0:
+            if r < MIN_ROOT_SCORE and p == 0 and e == 0 and c == 0 and w == 0 and m == 0 and q == 0:
                 continue
             score = (WEIGHTS["roots"] * r + WEIGHTS["rare"] * w + WEIGHTS["phrase"] * p
-                     + WEIGHTS["expression"] * e + WEIGHTS["context"] * c + WEIGHTS["passage"] * m)
+                     + WEIGHTS["expression"] * e + WEIGHTS["context"] * c + WEIGHTS["passage"] * m
+                     + ROOTPAIR_WEIGHT * q)
             if formula_clauses[i] and not (c or w or m) and explained_clause(i, j) in formula_clauses[i]:
                 score *= FORMULA_PENALTY
-            ranked.append((score, j, r, p, e, c, w, m))
+            ranked.append((score, j, r, p, e, c, w, m, q))
         ranked.sort(key=lambda t: (-t[0], t[1]))
         top = ranked[:TOP_K]
         if CLAUSE_FAIR is not None and len(clauses[i]) > 1 and ranked:
@@ -824,7 +925,7 @@ def build_related(verses):
         #  (، [اللفظ النادر، عدد آياته] أو 0 (، رقم الجملة التي يبيّنها من الآية))]
         # سبب السياق: رمز، أو [5، سورة السؤال، آيته، العبارة] للجواب في موضع آخر
         items = []
-        for score, j, r, p, e, c, w, m in top:
+        for score, j, r, p, e, c, w, m, q in top:
             u = verses[j]
             roots_list = shared_roots(v, u, idf) if r >= MIN_ROOT_SCORE else []
             items.append([
@@ -835,7 +936,7 @@ def build_related(verses):
                  else [CONTEXT_PARALLEL, *passages[i][j][1]] if m else 0),
                 best_phrase[i][j] if p else "",
                 " ".join(roots_list),
-                best_expr[i][j] if e else "",
+                best_expr[i][j] if e else best_root_pair[i][j] if q else "",
             ])
             clause = explained_clause(i, j)
             if w or clause is not None:

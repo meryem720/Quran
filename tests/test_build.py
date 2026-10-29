@@ -70,6 +70,12 @@ class PipelineTest(unittest.TestCase):
         # ﴿فاقطعوا أيديهما… ۝ فمن تاب من بعد ظلمه وأصلح﴾، و«ومن» عطف لا تفريع (البقرة 114)
         self.assertEqual(links[i[(5, 38)]][i[(5, 39)]], kinds["faman"])
         self.assertIsNone(self.verses[i[(2, 114)]]["start"])
+        # ﴿زين للناس حب الشهوات ۝ قل أؤنبئكم بخير من ذلكم﴾
+        self.assertEqual(links[i[(3, 14)]][i[(3, 15)]], build.CONTEXT_COMPARISON)
+        # ﴿ويسألونك عن المحيض ۝ نساؤكم حرث لكم﴾
+        self.assertEqual(links[i[(2, 222)]][i[(2, 223)]], build.CONTEXT_ASKED)
+        # ﴿قالت نملة… ۝ فتبسم ضاحكا من قولها﴾
+        self.assertEqual(links[i[(27, 18)]][i[(27, 19)]], build.CONTEXT_NARRATIVE)
         # الآية التي تبدأ بحرف عطف أو جر كلام جديد: ﴿والذين يؤمنون بما أنزل إليك﴾، ﴿في جنات النعيم﴾
         self.assertNotIn(i[(2, 4)], links.get(i[(2, 3)], {}))
         self.assertNotIn(i[(56, 12)], links.get(i[(56, 11)], {}))
@@ -130,6 +136,12 @@ class RelatedTest(unittest.TestCase):
         self.assertEqual(items[0][3], build.CONTEXT_CONTINUATION["faman"])
         # لا رابط يبيّن الخاتمة ﴿والله عزيز حكيم﴾ وحدها
         self.assertFalse([x for x in items if len(x) > 8 and x[8] == 1])
+
+    def test_bare_phrases(self):
+        verses = build.parse_morphology(build.MORPH_FILE)
+        # ﴿والله﴾: الواو حرف عطف بوسوم الصرف، فتُحذف عند مطابقة العبارات
+        word = verses[[k for k, v in enumerate(verses) if (v["s"], v["a"]) == (33, 53)][0]]["words"]
+        self.assertIn("الله", [build._bare(w) for w in word])
 
     def test_rare_word_reason_is_listed(self):
         item = self.ids("15:87")["39:23"]
