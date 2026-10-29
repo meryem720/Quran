@@ -256,3 +256,22 @@ button.more {
 .gloss h2 { margin-top: 0; font-family: var(--quran-font); font-weight: normal; font-size: 1.3rem; }
 .senses { margin: 4px 0; padding-inline-start: 20px; font-size: 1.1rem; }
 .senses a { text-decoration: underline; }
+
+/* ---------- البيان جملةً جملة ---------- */
+
+.clause-num {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--ui-font);
+  font-size: 0.7rem;
+  line-height: 1.6;
+  text-align: center;
+  vertical-align: super;
+}
+.clause-group h3 { font-size: 1.05rem; font-weight: normal; margin: 22px 0 8px; color: var(--muted); }
+.clause-group h3 .q { font-family: var(--quran-font); font-size: 1.25rem; color: var(--text); }
+.clause-group h3 .clause-num { vertical-align: middle; font-size: 0.8rem; }

@@ -22,12 +22,15 @@ from collections import defaultdict
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MORPH_FILE = os.path.join(ROOT_DIR, "data", "quran-morphology.txt")
+WAQF_FILE = os.path.join(ROOT_DIR, "data", "waqf.tsv")
 OUT_DIR = os.path.join(ROOT_DIR, "web", "data")
 
 TOP_K = 10
 WEIGHTS = {"roots": 1.0, "rare": 0.3, "phrase": 1.0, "expression": 1.0, "context": 2.0, "passage": 0.5}
 # الخصائص الشائعة جدًا (مثل «قول» و«الله») لا تميّز بين الآيات
 MAX_FEATURE_DF = 400
+# الألفاظ الشائعة جدًا لا تُبنى عليها مطابقة الجمل (idf أقل من هذا: أكثر من نحو 400 آية)
+MIN_CLAUSE_IDF = math.log(6236 / 400)
 MAX_NGRAM_DF = 40
 NGRAM_SIZES = (2, 3, 4)
 MIN_ROOT_SCORE = 0.08
@@ -42,6 +45,23 @@ PASSAGE_WINDOW = 5
 PASSAGE_SUPPORT = 0.1
 PASSAGE_NAME_VERSES = 2
 PASSAGE_NAME_BACK = 20
+# البيان جملةً جملة (انظر clause_similarity)
+CLAUSE_WEIGHT = 0.8   # وزن تشابه الجملتين مقارنةً بتشابه الآيتين كاملتين
+CLAUSE_INFO = 8.0     # مجموع ندرة الألفاظ المشتركة (idf) الذي تُعدّ به الجملتان متطابقتين معنًى
+CLAUSE_STRONG = 0.6   # تشابه قوي بين جملتين
+CLAUSE_FORMULA = 4    # جملة تشبه بقوة جملًا في هذا العدد من الآيات فأكثر: صيغة لا بيان
+CLAUSE_MIN_WORDS = 2  # أقل عدد من الألفاظ ذات المعنى غير الشائعة في الجملة
+CLAUSE_KEEP = 5       # أفضل ما يُحفظ لكل جملة
+# لكل جملة من الآية الطويلة أفضل بياناتها (CLAUSE_PER) في القائمة إن بلغت درجتها هذه النسبة
+# من أقوى رابط (None: ترتيب بالدرجة وحدها)
+CLAUSE_FAIR = 0.5
+CLAUSE_PER = 2        # كم بيانًا يُضمن لكل جملة
+CLAUSE_POOL = 40      # ما يُنظر فيه من المرشحين لذلك
+# رابط لا يبيّن من الآية إلا جملة صيغة متكررة (﴿كذلك يبين الله لكم الآيات﴾): تُضرب درجته في هذا
+FORMULA_PENALTY = 0.5
+# ألفاظ الفواصل: لفظ يختم الآية في هذه النسبة من مواضعه فأكثر (عليم، حكيم، غفور رحيم…)
+FASILA_SHARE = 0.85
+FASILA_MIN = 25
 # اللفظ النادر: لا يرد إلا في هذا العدد من الآيات أو أقل
 RARE_DF = 3
 RARE_ROOT_DF = 60
@@ -89,6 +109,7 @@ def _start_kind(segments):
     - "yawm": ﴿يوم/يومئذ/أياما﴾ ظرف يبيّن وقت ما قبلها: ﴿ولا تخزني يوم يبعثون ۝ يوم لا ينفع مال ولا بنون﴾.
     - "ulaika": ﴿أولئك﴾ إشارة إلى من وُصفوا قبلها: ﴿والسابقون السابقون ۝ أولئك المقربون﴾.
     - "idha": ﴿إذا﴾ بلا عطف تصف حال ما قبلها: ﴿خلق هلوعا ۝ إذا مسه الشر جزوعا﴾.
+    - "bala": ﴿بلى﴾ جواب ما نُفي قبلها: ﴿أيحسب الإنسان ألن نجمع عظامه ۝ بلى قادرين﴾.
     """
     prefixes = [tags for _, tags in segments if "PREF" in tags]
     stems = [(pos, tags) for pos, tags in segments if "PREF" not in tags and "SUFF" not in tags]
@@ -107,6 +128,8 @@ def _start_kind(segments):
         return "ulaika"
     if "LEM:إِذا" in tags:
         return "idha"
+    if "LEM:بَلَى" in tags:
+        return "bala"
     return None
 
 
@@ -206,6 +229,99 @@ def root_similarity(verses):
                     acc[j] += x * y
         scores.append(acc)
     return scores, idf
+
+
+# ---------- المؤشر 1أ: البيان جملةً جملة ----------
+
+def load_clauses(verses, path=WAQF_FILE):
+    """جمل كل آية بحسب علامات الوقف في المصحف (tools/waqf.py): [[(أول كلمة، بعد آخر كلمة)]].
+    الآية بلا وقف داخلها جملة واحدة."""
+    ends = {}
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.strip() and not line.startswith("#"):
+                    key, cuts = line.rstrip("\n").split("\t")
+                    ends[key] = [int(x) for x in cuts.split(",")]
+    result = []
+    for v in verses:
+        cuts = [0] + ends.get(f"{v['s']}:{v['a']}", []) + [len(v["words"])]
+        result.append([(cuts[k], cuts[k + 1]) for k in range(len(cuts) - 1)])
+    return result
+
+
+def fasila_lemmas(verses):
+    """ألفاظ الفواصل: تختم الآية في أكثر مواضعها (﴿إن الله غفور رحيم﴾، ﴿وهو العزيز الحكيم﴾).
+    لا تدل وحدها على أن جملتين في معنى واحد."""
+    final, total = defaultdict(int), defaultdict(int)
+    for v in verses:
+        lemmas = ["L:" + normalize(w["lemma"]) for w in v["words"] if _content(w) and w["lemma"]]
+        for k in set(lemmas):
+            total[k] += 1
+        for k in set(lemmas[-2:]):
+            final[k] += 1
+    return {k for k, f in final.items() if f >= FASILA_MIN and f / total[k] >= FASILA_SHARE}
+
+
+def clause_similarity(verses, clauses, idf):
+    """الآية الطويلة تقول أشياء عدة، فتُقارن كل جملة منها بجمل الآيات الأخرى، فلا تضيع جملة
+    ﴿يسألونك عن الخمر والميسر﴾ في طول آية البقرة 219 كما تضيع في تشابه الآيتين كاملتين.
+
+    تشابه جملتين = جيب التمام × نسبة ما تشتركان فيه من ندرة الألفاظ (idf لكل لفظ مرة، دون ألفاظ
+    الفواصل) إلى CLAUSE_INFO، فلا تكفي كلمة واحدة شائعة ولا ﴿سميع عليم﴾. والجملة الأخيرة التي تشبه
+    خواتيم آيات كثيرة صيغة ختام (﴿ومن كفر فإن الله غني عن العالمين﴾) لا يُبنى عليها.
+    تُحفظ لكل جملة أفضل CLAUSE_KEEP آيات، فلكل جملة نصيبها.
+    يرجع ([لكل آية {آية: (التشابه، رقم الجملة فيها، رقم الجملة في الأخرى)}]، [لكل آية جملها الصيغ]).
+    """
+    fasila = fasila_lemmas(verses)
+    units = []  # (رقم الآية، رقم الجملة، المتجه بعد التطبيع)
+    for i, v in enumerate(verses):
+        for c, (start, end) in enumerate(clauses[i]):
+            feats = root_features({"words": v["words"][start:end]})
+            # ﴿قل العفو﴾: لفظ واحد ذو معنى بعد «قال» الشائعة، لا يكفي لمقارنة الجملة وحدها
+            if sum(1 for k in feats if k.startswith("L:") and idf[k] >= MIN_CLAUSE_IDF) < CLAUSE_MIN_WORDS:
+                continue
+            vec = {k: (1 + math.log(tf)) * idf[k] for k, tf in feats.items()}
+            norm = math.sqrt(sum(x * x for x in vec.values())) or 1.0
+            units.append((i, c, {k: x / norm for k, x in vec.items()}))
+
+    postings = defaultdict(list)
+    for u, (i, c, vec) in enumerate(units):
+        for k, x in vec.items():
+            if idf[k] >= MIN_CLAUSE_IDF:
+                postings[k].append((u, x))
+    matches = []  # لكل جملة: {آية: (التشابه، رقم الجملة في الأخرى)}
+    for i, c, vec in units:
+        dot = defaultdict(float)
+        info = defaultdict(float)
+        for k, x in vec.items():
+            if idf[k] < MIN_CLAUSE_IDF:
+                continue
+            for u, y in postings[k]:
+                dot[u] += x * y
+                if k.startswith("L:") and k not in fasila:
+                    info[u] += idf[k]
+        found = {}
+        for u, d in dot.items():
+            j, cj, _ = units[u]
+            score = d * min(1.0, info[u] / CLAUSE_INFO)
+            if j != i and score > found.get(j, (0,))[0]:
+                found[j] = (score, cj)
+        matches.append(found)
+
+    best = defaultdict(dict)
+    formulas = defaultdict(set)
+    for (i, c, _), found in zip(units, matches):
+        # جملة أخيرة تشبه بقوة خواتيم آيات كثيرة: صيغة ختام (﴿كذلك يبين الله لكم الآيات﴾).
+        # أما الجملة المتكررة في أول الآية أو وسطها فتعليم يكرره القرآن (﴿لا أملك لنفسي ضرا ولا نفعا﴾)
+        if (c == len(clauses[i]) - 1 > 0
+                and sum(1 for score, _ in found.values() if score >= CLAUSE_STRONG) >= CLAUSE_FORMULA):
+            formulas[i].add(c)
+            continue
+        for j, (score, cj) in sorted(found.items(), key=lambda t: -t[1][0])[:CLAUSE_KEEP]:
+            if score > best[i].get(j, (0,))[0]:
+                best[i][j] = (score, c, cj)
+    return [best[i] for i in range(len(verses))], [formulas[i] for i in range(len(verses))]
 
 
 # ---------- المؤشر 1ب: اللفظ النادر ----------
@@ -352,7 +468,7 @@ CONTEXT_QUESTION = 3  # جواب ﴿هل أتاك / هل أنبئكم / هل أ�
 CONTEXT_DIALOGUE = 4  # سؤال قصير يُجاب عنه في الآية التالية
 CONTEXT_ANSWER_ELSEWHERE = 5  # العبارة نفسها سُئل عنها في موضع آخر وأُجيب
 # كلام متصل: الآية الثانية تبدأ بما لا يُبتدأ به (انظر _start_kind)
-CONTEXT_CONTINUATION = {"illa": 6, "gen": 7, "yawm": 8, "ulaika": 9, "idha": 10}
+CONTEXT_CONTINUATION = {"illa": 6, "gen": 7, "yawm": 8, "ulaika": 9, "idha": 10, "bala": 12}
 CONTEXT_PARALLEL = 11  # [11، سورة المقطع المقابل، أول آية، آخر آية]: القصة نفسها في موضع آخر
 # لا يُنقل إلى المواضع الأخرى إلا جواب السؤال: أما الكلام المتصل فيصف موضعه وحده
 # (جُرّب نقله فكانت أكثر نتائجه من الفواصل المتكررة مثل ﴿على كل شيء قدير﴾)
@@ -396,7 +512,8 @@ def context_links(verses):
     - سؤال قصير يُجاب عنه في الآية التالية (انظر _answers).
     - ﴿هل أتاك حديث…﴾ و﴿هل أنبئكم…﴾ و﴿هل أدلكم…﴾ في آية قصيرة يُجاب عنها
       في الآية التالية (في الآية الطويلة يأتي الجواب غالبًا في الآية نفسها).
-    - كلام متصل: الآية التي تبدأ بـ﴿إلا﴾ أو ﴿يوم﴾ أو ﴿أولئك﴾ أو ﴿إذا﴾ أو باسم مجرور تتمة للآية السابقة.
+    - كلام متصل: الآية التي تبدأ بـ﴿إلا﴾ أو ﴿يوم﴾ أو ﴿أولئك﴾ أو ﴿إذا﴾ أو ﴿بلى﴾ أو باسم مجرور
+      تتمة للآية السابقة.
     """
     pos = {(v["s"], v["a"]): i for i, v in enumerate(verses)}
     links = defaultdict(dict)  # i -> {j: reason}
@@ -590,6 +707,8 @@ def _context_reason(i, j, context, elsewhere, best_phrase, verses):
 
 def build_related(verses):
     roots, idf = root_similarity(verses)
+    clauses = load_clauses(verses)
+    by_clause, formula_clauses = clause_similarity(verses, clauses, idf)
     phrases, best_phrase = phrase_similarity(verses)
     expressions, best_expr = expression_similarity(verses)
     context = context_links(verses)
@@ -619,6 +738,23 @@ def build_related(verses):
                   if _content(w) and w["root"] not in _FORMULA_ROOTS), None)
         subject[q] = toks[k:k + 2] if k is not None else [None]
 
+    # أي جملة من الآية يبيّنها الرابط: أكثرها اشتراكًا معه في الألفاظ النادرة
+    clause_lemmas = [[{k for k in root_features({"words": v["words"][a:b]}) if k.startswith("L:")}
+                      for a, b in clauses[i]] for i, v in enumerate(verses)]
+    verse_lemmas = [{k for k in root_features(v) if k.startswith("L:")} for v in verses]
+
+    def explained_clause(i, j):
+        if len(clauses[i]) < 2:
+            return None
+        if j in by_clause[i]:
+            return by_clause[i][j][1]
+        weights = [sum(idf[k] for k in lemmas & verse_lemmas[j]) for lemmas in clause_lemmas[i]]
+        best = max(range(len(weights)), key=lambda c: weights[c])
+        if weights[best] > 0:
+            return best
+        # كلام متصل بلا لفظ مشترك: الآية التالية تتمّ آخر الآية، والسابقة سياق أولها
+        return len(clauses[i]) - 1 if j == i + 1 else 0 if j == i - 1 else None
+
     related = {}
     for i, v in enumerate(verses):
         # إذا وردت عبارة الآية (مثل ﴿يوم الدين﴾) في آية سُئل فيها عنها،
@@ -634,10 +770,12 @@ def build_related(verses):
                 if p > elsewhere.get(a, (0, None))[0]:
                     elsewhere[a] = (p, j)
         candidates = (set(roots[i]) | set(phrases[i]) | set(expressions[i])
-                      | set(context.get(i, {})) | set(elsewhere) | set(rare[i]) | set(passages[i]))
+                      | set(context.get(i, {})) | set(elsewhere) | set(rare[i]) | set(passages[i])
+                      | set(by_clause[i]))
         ranked = []
         for j in candidates:
-            r = roots[i].get(j, 0.0)
+            # تشابه الآيتين كاملتين، أو جملة من هذه بجملة من تلك إن كان أقوى
+            r = max(roots[i].get(j, 0.0), CLAUSE_WEIGHT * by_clause[i][j][0] if j in by_clause[i] else 0.0)
             w = rare[i][j][0] if j in rare[i] else 0.0
             p = phrases[i].get(j, 0.0)
             # التعبير يُحسب فقط إذا لم تتطابق العبارة حرفيًا، حتى لا يُعدّ الشيء مرتين
@@ -651,15 +789,30 @@ def build_related(verses):
                 continue
             score = (WEIGHTS["roots"] * r + WEIGHTS["rare"] * w + WEIGHTS["phrase"] * p
                      + WEIGHTS["expression"] * e + WEIGHTS["context"] * c + WEIGHTS["passage"] * m)
+            if formula_clauses[i] and not (c or w or m) and explained_clause(i, j) in formula_clauses[i]:
+                score *= FORMULA_PENALTY
             ranked.append((score, j, r, p, e, c, w, m))
         ranked.sort(key=lambda t: (-t[0], t[1]))
+        top = ranked[:TOP_K]
+        if CLAUSE_FAIR is not None and len(clauses[i]) > 1 and ranked:
+            # لكل جملة نصيبها: أفضل بيان لكل جملة أولًا، ثم البقية بالدرجة
+            chosen, covered = [], defaultdict(int)
+            for t in ranked[:CLAUSE_POOL]:
+                c = explained_clause(i, t[1])
+                if c is not None and covered[c] < CLAUSE_PER and t[0] >= CLAUSE_FAIR * ranked[0][0]:
+                    covered[c] += 1
+                    chosen.append(t)
+            chosen = chosen[:TOP_K]
+            taken = {t[1] for t in chosen}
+            rest = [t for t in ranked if t[1] not in taken][:TOP_K - len(chosen)]
+            top = sorted(chosen + rest, key=lambda t: (-t[0], t[1]))
 
         # صيغة مختصرة لتصغير الملف:
         # [سورة، آية، الدرجة×100، سبب السياق، العبارة المشتركة، الجذور المشتركة، التعبير المشترك
-        #  (، [اللفظ النادر، عدد آياته])]
+        #  (، [اللفظ النادر، عدد آياته] أو 0 (، رقم الجملة التي يبيّنها من الآية))]
         # سبب السياق: رمز، أو [5، سورة السؤال، آيته، العبارة] للجواب في موضع آخر
         items = []
-        for score, j, r, p, e, c, w, m in ranked[:TOP_K]:
+        for score, j, r, p, e, c, w, m in top:
             u = verses[j]
             roots_list = shared_roots(v, u, idf) if r >= MIN_ROOT_SCORE else []
             items.append([
@@ -672,13 +825,16 @@ def build_related(verses):
                 " ".join(roots_list),
                 best_expr[i][j] if e else "",
             ])
-            if w:
-                items[-1].append(list(rare[i][j][1:]))
+            clause = explained_clause(i, j)
+            if w or clause is not None:
+                items[-1].append(list(rare[i][j][1:]) if w else 0)
+            if clause is not None:
+                items[-1].append(clause)
         related[f"{v['s']}:{v['a']}"] = items
     return related
 
 
-def build_quran(verses):
+def build_quran(verses, clauses=None):
     surahs = []
     for v in verses:
         if v["s"] > len(surahs):
@@ -690,7 +846,12 @@ def build_quran(verses):
         ])
     # اللمّات الفعلية: تمييز الفعل من الاسم يفرّق «صَبَرَ» عن «جِنَّة» عند اتفاق الكتابة
     verbs = sorted({w["lemma"] for v in verses for w in v["words"] if w["verb"] and w["lemma"]})
-    return {"surahs": surahs, "verbs": verbs}
+    result = {"surahs": surahs, "verbs": verbs}
+    if clauses:
+        # جمل الآية بحسب الوقف: "سورة:آية" -> [عدد كلمات الجمل قبل كل حدّ]، للآيات ذات أكثر من جملة
+        result["waqf"] = {f"{v['s']}:{v['a']}": [end for _, end in spans[:-1]]
+                          for v, spans in zip(verses, clauses) if len(spans) > 1}
+    return result
 
 
 def main():
@@ -699,7 +860,7 @@ def main():
     related = build_related(verses)
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(os.path.join(OUT_DIR, "quran.json"), "w", encoding="utf-8") as f:
-        json.dump(build_quran(verses), f, ensure_ascii=False, separators=(",", ":"))
+        json.dump(build_quran(verses, load_clauses(verses)), f, ensure_ascii=False, separators=(",", ":"))
     with open(os.path.join(OUT_DIR, "related.json"), "w", encoding="utf-8") as f:
         json.dump(related, f, ensure_ascii=False, separators=(",", ":"))
     print("تم إنشاء web/data/quran.json و web/data/related.json", file=sys.stderr)

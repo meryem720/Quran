@@ -12,10 +12,13 @@ const CONTEXT_REASONS = {
   8: "كلام متصل: الثانية تبدأ بـ﴿يوم﴾ أو ﴿يومئذ﴾ فتبيّن وقت ما في الأولى",
   9: "كلام متصل: ﴿أولئك﴾ في أول الثانية إشارة إلى من وُصفوا في الأولى",
   10: "كلام متصل: ﴿إذا﴾ في أول الثانية تصف حال ما في الأولى",
+  12: "كلام متصل: ﴿بلى﴾ في أول الثانية جواب ما نُفي في الأولى",
 };
 // [11، سورة المقطع المقابل، أول آية، آخر آية]: القصة نفسها في موضع آخر
 const PARALLEL = 11;
 const MAX_RESULTS = 200;
+// جذر يرد في أكثر من هذا العدد من الآيات لا يُبرَز في آيات البيان (الله، قال، كان…)
+const COMMON_ROOT = 400;
 const TOPIC_PAGE = 40;
 const SUGGESTED_TOPICS = [
   "الصلاة", "الزكاة", "الصيام", "الحج", "الصبر", "التوبة", "الشكر", "الرحمة", "التقوى",
@@ -34,6 +37,7 @@ const state = {
   topicViews: new Map(), // عنوان صفحة الموضوع -> {عدد المعروض، موضع القراءة}
   verseIndex: new Map(), // "s:a" -> رقم الآية في فهرس الموضوعات
   glosses: {},    // لمّة موحّدة -> {h: اللفظ في المعجم، d: [معانيه]} (مختار الصحاح)
+  waqf: {},       // "s:a" -> [عدد كلمات الجمل قبل كل حدّ وقف] للآيات ذات أكثر من جملة
   lemmaText: new Map(), // لمّة موحّدة -> كتابتها بلا تشكيل، للألفاظ ذات الجذر
   lastScrollY: 0,
   navigatedByLink: false, // التنقل الحالي بنقر رابط (لا برجوع المتصفح)
@@ -57,10 +61,14 @@ function refLabel(s, a) {
   return `${state.surahs[s - 1].name} ${a}`;
 }
 
-function verseHtml(s, a, { clickable = false, highlightRoot = null, highlightWord = null, highlightLemmas = null, highlightBare = null } = {}) {
+function verseHtml(s, a, { clickable = false, highlightRoot = null, highlightRoots = null, highlightWord = null,
+  highlightLemmas = null, highlightBare = null, clauseEnds = null } = {}) {
   const words = getVerse(s, a);
-  const parts = words.map(([text, root, lemma]) => {
-    const hit = (highlightRoot && root === highlightRoot) ||
+  const parts = words.map(([text, root, lemma], k) => {
+    // رقم الجملة بعد آخر كلمة منها (الوقف في المصحف)
+    const end = clauseEnds && clauseEnds.indexOf(k + 1);
+    const mark = end != null && end >= 0 ? ` <sup class="clause-num">${end + 1}</sup>` : "";
+    const hit = (highlightRoot && root === highlightRoot) || (highlightRoots && highlightRoots.has(root)) ||
       (highlightLemmas && highlightLemmas.has(lemma)) ||
       (highlightWord && (normalize(text).includes(highlightWord) || normalize(lemma) === highlightWord
         || (highlightBare && normalize(lemma) === highlightBare)
@@ -71,10 +79,11 @@ function verseHtml(s, a, { clickable = false, highlightRoot = null, highlightWor
       const gloss = state.glosses[key];
       const title = `الجذر: ${root}` + (gloss ? ` · ${gloss.h}: ${gloss.d.join("، ")}` : "");
       return `<span class="${cls}" tabindex="0" role="link" data-root="${escapeHtml(root)}"${gloss
-        ? ` data-lemma="${escapeHtml(key)}"` : ""} title="${escapeHtml(title)}">${escapeHtml(text)}</span>`;
+        ? ` data-lemma="${escapeHtml(key)}"` : ""} title="${escapeHtml(title)}">${escapeHtml(text)}</span>${mark}`;
     }
-    return hit ? `<span class="${cls}">${escapeHtml(text)}</span>` : escapeHtml(text);
+    return (hit ? `<span class="${cls}">${escapeHtml(text)}</span>` : escapeHtml(text)) + mark;
   });
+  if (clauseEnds && clauseEnds.length) parts[parts.length - 1] += ` <sup class="clause-num">${clauseEnds.length + 1}</sup>`;
   return `<span class="quran">${parts.join(" ")} <span class="ayah-num">﴿${a}﴾</span></span>`;
 }
 
@@ -131,7 +140,13 @@ function renderVerse(s, a) {
 
   const items = state.related[`${s}:${a}`] || [];
   const top = items.length ? items[0][2] : 1;
-  const relatedHtml = items.map((item) => {
+  const ends = state.waqf[`${s}:${a}`] || null;
+  const words = getVerse(s, a);
+  const cuts = ends ? [0, ...ends, words.length] : [0, words.length];
+  // الجذور التي تُبرَز في آية البيان: المشتركة مع الجملة (أو الآية)، دون الشائعة جدًا (الله، قال…)
+  const rootsOf = (from, to) => new Set(words.slice(from, to).map((w) => w[1])
+    .filter((r) => r && (state.rootIndex.get(r) || []).length <= COMMON_ROOT));
+  const card = (item, roots) => {
     const [rs, ra, score] = item;
     const width = Math.max(8, Math.round((score / top) * 100));
     return `
@@ -140,10 +155,30 @@ function renderVerse(s, a) {
           <a class="ref" href="#${rs}:${ra}">${refLabel(rs, ra)}</a>
           <span class="bar" title="درجة الارتباط: ${score}"><span style="width:${width}%"></span></span>
         </div>
-        ${verseHtml(rs, ra)}
+        ${verseHtml(rs, ra, { highlightRoots: roots })}
         <div class="chips">${reasonChips(item)}</div>
       </article>`;
-  }).join("");
+  };
+  // بيان الآية جملةً جملة: كل رابط تحت الجملة التي يبيّنها (item[8])
+  let relatedHtml;
+  if (ends && items.some((item) => item[8] !== undefined)) {
+    const groups = cuts.slice(0, -1).map((from, c) => {
+      const group = items.filter((item) => item[8] === c);
+      if (!group.length) return "";
+      const text = words.slice(from, cuts[c + 1]).map((w) => w[0]).join(" ");
+      const roots = rootsOf(from, cuts[c + 1]);
+      return `
+        <section class="clause-group">
+          <h3><span class="clause-num">${c + 1}</span> ﴿<span class="q">${escapeHtml(text)}</span>﴾</h3>
+          ${group.map((item) => card(item, roots)).join("")}
+        </section>`;
+    }).join("");
+    const whole = items.filter((item) => item[8] === undefined);
+    relatedHtml = groups + (whole.length ? `<section class="clause-group"><h3>بالآية كلها</h3>
+      ${whole.map((item) => card(item, rootsOf(0, words.length))).join("")}</section>` : "");
+  } else {
+    relatedHtml = items.map((item) => card(item, rootsOf(0, words.length))).join("");
+  }
 
   // المواضع الأخرى التي قُصّت فيها القصة نفسها
   const passages = [...new Map(items.filter(([, , , ctx]) => Array.isArray(ctx) && ctx[0] === PARALLEL)
@@ -155,12 +190,12 @@ function renderVerse(s, a) {
     <section class="card main-verse">
       <div class="ref">سورة ${state.surahs[s - 1].name} · الآية ${a}</div>
       ${prev}
-      ${verseHtml(s, a, { clickable: true })}
+      ${verseHtml(s, a, { clickable: true, clauseEnds: ends })}
       ${next}
       ${passagesHtml}
     </section>
     <div class="pager">${prevLink}${nextLink}</div>
-    <h2>الآيات المفسِّرة <small>النقر على أي كلمة يعرض مواضع جذرها في القرآن</small></h2>
+    <h2>الآيات المفسِّرة <small>${ends ? "جملةً جملة بحسب علامات الوقف في المصحف، والألفاظ المشتركة مُبرَزة · " : ""}النقر على أي كلمة يعرض مواضع جذرها في القرآن</small></h2>
     ${relatedHtml || `<p class="empty">لم يُعثر على آيات مرتبطة.</p>`}
   `;
   document.title = `${refLabel(s, a)} · تفسير القرآن بالقرآن`;
@@ -611,6 +646,7 @@ async function init() {
     state.surahs = quran.surahs;
     state.related = related;
     state.glosses = glosses;
+    state.waqf = quran.waqf || {};
     state.topicIndex = T.buildIndex(quran);
     state.topicIndex.verses.forEach((v, i) => state.verseIndex.set(`${v.s}:${v.a}`, i));
     buildIndexes();
