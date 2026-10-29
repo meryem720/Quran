@@ -65,6 +65,8 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(links[i[(56, 10)]][i[(56, 11)]], kinds["ulaika"])
         # ﴿إن الإنسان خلق هلوعا ۝ إذا مسه الشر جزوعا﴾
         self.assertEqual(links[i[(70, 19)]][i[(70, 20)]], kinds["idha"])
+        # ﴿أيحسب الإنسان ألن نجمع عظامه ۝ بلى قادرين على أن نسوي بنانه﴾
+        self.assertEqual(links[i[(75, 3)]][i[(75, 4)]], kinds["bala"])
         # الآية التي تبدأ بحرف عطف أو جر كلام جديد: ﴿والذين يؤمنون بما أنزل إليك﴾، ﴿في جنات النعيم﴾
         self.assertNotIn(i[(2, 4)], links.get(i[(2, 3)], {}))
         self.assertNotIn(i[(56, 12)], links.get(i[(56, 11)], {}))
@@ -126,3 +128,39 @@ class RelatedTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClauseTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.verses = build.parse_morphology(build.MORPH_FILE)
+        cls.index = {(v["s"], v["a"]): i for i, v in enumerate(cls.verses)}
+        cls.clauses = build.load_clauses(cls.verses)
+
+    def text(self, ref, c):
+        i = self.index[ref]
+        a, b = self.clauses[i][c]
+        return " ".join(build.normalize(w["text"]) for w in self.verses[i]["words"][a:b])
+
+    def test_waqf_splits_verse_into_sentences(self):
+        # آية الكرسي تسع جمل بحسب علامات الوقف في المصحف
+        self.assertEqual(len(self.clauses[self.index[(2, 255)]]), 9)
+        self.assertEqual(self.text((2, 255), 3), "من ذا الذي يشفع عنده الا باذنه")
+        # الآية بلا وقف داخلها جملة واحدة
+        self.assertEqual(len(self.clauses[self.index[(112, 1)]]), 1)
+
+    def test_fasila_words(self):
+        fasila = build.fasila_lemmas(self.verses)
+        for word in ("عليم", "حكيم", "رحيم", "غفور"):
+            self.assertIn("L:" + word, fasila)
+        # «عذاب» يختم آيات كثيرة لكنه ليس صيغة ختام في أكثر مواضعه
+        self.assertNotIn("L:عذاب", fasila)
+
+    def test_clause_explanations(self):
+        _, idf = build.root_similarity(self.verses)
+        by_clause, formulas = build.clause_similarity(self.verses, self.clauses, idf)
+        i = self.index
+        # ﴿من ذا الذي يشفع عنده إلا بإذنه﴾ ← ﴿ولا تنفع الشفاعة عنده إلا لمن أذن له﴾ (سبأ 23)
+        self.assertEqual(by_clause[i[(2, 255)]][i[(34, 23)]][1], 3)
+        # ﴿كذلك يبين الله لكم الآيات لعلكم تتفكرون﴾ صيغة ختام في البقرة 219
+        self.assertIn(len(self.clauses[i[(2, 219)]]) - 1, formulas[i[(2, 219)]])
