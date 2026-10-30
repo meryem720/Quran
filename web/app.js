@@ -56,6 +56,8 @@ const state = {
   glosses: {},    // لمّة موحّدة -> {h: اللفظ في المعجم، d: [معانيه]} (مختار الصحاح)
   waqf: {},       // "s:a" -> [عدد كلمات الجمل قبل كل حدّ وقف] للآيات ذات أكثر من جملة
   explains: {},   // "s:a" -> "cause" | "purpose": الآية تبيّن سبب ما قبلها أو غايته
+  initials: new Set(), // "s:a" للآيات التي تبدأ بالحروف المقطعة (﴿الم﴾، ﴿حم﴾)
+  pageList: null, // القائمة المعروضة على دفعات في الصفحة الحالية
   rootSenses: {}, // جذر -> [جمل مادته في المعجم] للجذور الشائعة متعددة المعنى (مختار الصحاح)
   lemmaText: new Map(), // لمّة موحّدة -> كتابتها بلا تشكيل، للألفاظ ذات الجذر
   order: null,     // بيانات الترتيب (tools/order.py)
@@ -256,7 +258,7 @@ function explainsHtml(s, a) {
 // آية لا يشترك لفظها مع غيرها إلا في ألفاظ شائعة: بيانها الأقرب سياقها، ومعنى ألفاظها في المعجم
 function aloneHtml(s, a, items) {
   const words = getVerse(s, a);
-  if (words[0] && !words[0][1] && !words[0][2]) return initialsHtml(s, a);
+  if (state.initials.has(`${s}:${a}`)) return initialsHtml(s, a);
   if (items.some((it) => it[3] !== WEAK)) return "";
   const glossed = [...new Map(words.filter((w) => state.glosses[normalize(w[2])])
     .map((w) => [normalize(w[2]), w])).values()];
@@ -276,12 +278,12 @@ function aloneHtml(s, a, items) {
 // الحروف المقطعة: السور التي تُفتتح بها، وما يليها من ذكر الكتاب (من النص نفسه)
 const BOOK_LEMMAS = new Set(["كتاب", "قرءان", "تنزيل", "انزل", "نزل", "ذكر", "اوحي"]);
 function initialsHtml(s, a) {
-  const isInitials = (words) => words && words[0] && !words[0][1] && !words[0][2];
+  const isInitials = (n, a) => state.initials.has(`${n}:${a}`);
   const groups = new Map();
   let withBook = 0, total = 0;
   state.surahs.forEach((surah) => {
     // ﴿حم ۝ عسق﴾: الآية الثانية حروف مقطعة كذلك
-    const count = isInitials(surah.verses[0]) ? (isInitials(surah.verses[1]) ? 2 : 1) : 0;
+    const count = isInitials(surah.n, 1) ? (isInitials(surah.n, 2) ? 2 : 1) : 0;
     if (!count) return;
     surah.verses.slice(0, count).forEach((words, i) => {
       const letters = words[0][0];
@@ -665,30 +667,7 @@ function renderTopic(arg) {
     ${summaryHtml(sum)}
   `;
 
-  let shown = 0;
-  const viewKey = location.hash;
-  state.more = (focusNew) => {
-    const next = list.slice(shown, shown + TOPIC_PAGE);
-    const container = $("topic-verses");
-    container.insertAdjacentHTML("beforeend", next.map(verseCard).join(""));
-    // بعد «عرض المزيد» ينتقل التركيز إلى أول آية جديدة بدل أن يضيع
-    if (focusNew && container.children && container.children[shown]) container.children[shown].focus();
-    shown += next.length;
-    state.topicViews.set(viewKey, { shown, y: (state.topicViews.get(viewKey) || {}).y || 0 });
-    const left = list.length - shown;
-    $("topic-more").innerHTML = left > 0 ? `<button class="more" data-more>عرض المزيد (بقي ${left})</button>` : "";
-  };
-
-  // الرجوع من آية إلى الموضوع يعيد ما عُرض وموضع القراءة، أما الزيارة الجديدة فتبدأ من أوله
-  const saved = state.navigatedByLink ? null : state.topicViews.get(viewKey);
-  state.topicViews.delete(viewKey);
-  state.more(false);
-  while (saved && shown < saved.shown && shown < list.length) state.more(false);
-  if (saved && saved.open && document.querySelectorAll) {
-    const panels = document.querySelectorAll("#topic-verses details.explain");
-    saved.open.forEach((i) => { if (panels[i]) panels[i].open = true; });
-  }
-  if (saved && saved.y) setTimeout(() => window.scrollTo(0, saved.y), 0);
+  pagedList(list, verseCard, TOPIC_PAGE, { list: "topic-verses", more: "topic-more" });
 }
 
 // الخلاصة: كلها من ألفاظ الآيات (إحصاء وتجميع)، لا تفسير خارجي
@@ -825,24 +804,31 @@ function passageCard([s, a1, a2, chars = []], { parallels = false, label = "" } 
 }
 
 // عرض قائمة طويلة على دفعات: كل نقرة على «عرض المزيد» تضيف دفعة
-// والرجوع إلى الصفحة من آية يعيد ما عُرض منها وموضع القراءة (كما في صفحة الموضوع)
-function pagedList(items, render, size) {
+// عرض قائمة طويلة على دفعات («عرض المزيد») في صفحة الموضوع وصفحات الترتيب. الرجوع إلى الصفحة من آية
+// يعيد ما عُرض منها وما فُتح من «بيانها من القرآن» وموضع القراءة، أما الزيارة الجديدة فتبدأ من أولها
+function pagedList(items, render, size, { list = "order-list", more = "order-more" } = {}) {
   let shown = 0;
   const viewKey = location.hash;
+  state.pageList = list;
   state.more = (focusNew) => {
-    const container = $("order-list");
+    const container = $(list);
     const next = items.slice(shown, shown + size);
     container.insertAdjacentHTML("beforeend", next.map(render).join(""));
+    // بعد «عرض المزيد» ينتقل التركيز إلى أول عنصر جديد بدل أن يضيع
     if (focusNew && container.children && container.children[shown]) container.children[shown].focus();
     shown += next.length;
     state.topicViews.set(viewKey, { shown, y: (state.topicViews.get(viewKey) || {}).y || 0 });
     const left = items.length - shown;
-    $("order-more").innerHTML = left > 0 ? `<button class="more" data-more>عرض المزيد (بقي ${left})</button>` : "";
+    $(more).innerHTML = left > 0 ? `<button class="more" data-more>عرض المزيد (بقي ${left})</button>` : "";
   };
   const saved = state.navigatedByLink ? null : state.topicViews.get(viewKey);
   state.topicViews.delete(viewKey);
   state.more(false);
   while (saved && shown < saved.shown && shown < items.length) state.more(false);
+  if (saved && saved.open && document.querySelectorAll) {
+    const panels = document.querySelectorAll(`#${list} details`);
+    saved.open.forEach((i) => { if (panels[i]) panels[i].open = true; });
+  }
   if (saved && saved.y) setTimeout(() => window.scrollTo(0, saved.y), 0);
 }
 
@@ -1276,7 +1262,7 @@ function verseQuery(query) {
   const surah = state.surahs.find((x) => normalize(x.name) === name);
   if (!surah) return null;
   const a = named[3] ? +named[3] : 1;
-  return getVerse(surah.n, a) ? `${surah.n}:${a}` : null;
+  return `${surah.n}:${a}`;  // وإن لم توجد الآية: «الآية غير موجودة» كما في «2:999»
 }
 
 function setupControls() {
@@ -1361,7 +1347,7 @@ function setupControls() {
     const view = state.topicViews.get(old);
     if (view) {
       view.y = state.lastScrollY;
-      view.open = [...document.querySelectorAll("#topic-verses details.explain")]
+      view.open = [...document.querySelectorAll(`#${state.pageList || "topic-verses"} details`)]
         .reduce((open, d, i) => (d.open ? open.concat(i) : open), []);
     }
     route();
@@ -1402,6 +1388,7 @@ async function init() {
     state.rootSenses = rootSenses;
     state.waqf = quran.waqf || {};
     state.explains = quran.explains || {};
+    state.initials = new Set(quran.initials || []);
     if (order) indexOrder(order);
     state.topicIndex = T.buildIndex(quran);
     state.topicIndex.verses.forEach((v, i) => state.verseIndex.set(`${v.s}:${v.a}`, i));

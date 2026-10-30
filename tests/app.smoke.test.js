@@ -88,3 +88,12 @@ for (const [name, hash, expect] of [
     assert.ok(!html.includes("تعذّر تحميل البيانات"));
   });
 }
+
+// آية تبدأ بضمير (﴿هو الذي خلق لكم﴾) ليست من الحروف المقطعة، و﴿ذلك مبلغهم﴾ ليست تعليلًا
+test("لا تُعدّ الآية حروفًا مقطعة ولا تعليلًا خطأً", async () => {
+  for (const [hash, text] of [["#2:29", "حروف مقطعة"], ["#6:2", "حروف مقطعة"], ["#53:30", "تبيّن سبب"], ["#53:29", "تبيّن سبب"]]) {
+    const { html, errors } = await load(hash);
+    assert.deepEqual(errors, []);
+    assert.ok(!html.includes(text), `${hash}: ${text}`);
+  }
+});

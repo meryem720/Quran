@@ -569,14 +569,17 @@ def analyze(verses, debug=None):
                     chars[ident] = chars.get(ident, True) and ref
         if chars:
             mentions[key] = chars
-        # الآية التي لا يُبتدأ بها كلام تتمة لما قبلها، فهي من قصته
-        kind = "narr" if v["start"] and v["start"] != "yawm" else narrative_kind(v["words"])
+        # الآية التي لا يُبتدأ بها كلام تتمة لما قبلها، فهي من قصته؛ إلا ﴿يوم…﴾ ولام التعليل
+        # (﴿ليجزي الذين آمنوا﴾): ما بعدهما وعد أو وعيد لا سرد
+        kind = "narr" if v["start"] and v["start"] not in ("yawm", "purpose") else narrative_kind(v["words"])
+        # ﴿ونفخ في الصور﴾، ﴿فإذا هم من الأجداث﴾: مشهد الساعة لا يتصل بقصة قبله وإن جاء بفعل ماضٍ
+        if hour_marks.get(key) in (1, 2) and kind == "narr":
+            kind = "future"
         by_surah[v["s"]].append([v["a"], strong, weak - strong, kind])
 
     passages = []
     in_story = set()
     for s, rows in by_surah.items():
-        # آية تعدّد الأمم: ثلاث حقب فأكثر، أو حقبتان بجوار آية تعدّد
         # آية تعدّد الأمم (ولو ذكرًا عابرًا): ثلاث حقب فأكثر، أو حقبتان بجوار آية تعدّد
         # وتتمتها في الآية التالية أو السابقة إذا قصرت (﴿وقوم إبراهيم وقوم لوط﴾ بعد ﴿قوم نوح وعاد وثمود﴾)
         many = [len(r[1] | r[2]) >= LIST_SIZE for r in rows]
@@ -827,10 +830,14 @@ def voices(verses, in_story):
         if ident and not any(x[0] == s and x[1] == a for x in table[ident]):
             table[ident].append([s, a, kind])
 
-    for v in verses:
+    carried = False
+    for k, v in enumerate(verses):
         s, a, words = v["s"], v["a"], v["words"]
         story = in_story.get((s, a))
-        spoken_by_other = False  # فعل قول فاعله غير الله قبل الموضع: ما بعده كلامه
+        # فعل قول فاعله غير الله قبل الموضع: ما بعده كلامه. ويمتد إلى الآية التالية إن كانت تتمة
+        # لكلامه (﴿قالوا إنا أُرسلنا إلى قوم مجرمين ۝ لنرسل عليهم حجارة﴾ قول الملائكة لا قول الله)
+        same_surah = k > 0 and verses[k - 1]["s"] == s
+        spoken_by_other = carried and same_surah and bool(v["start"])
         for i, w in enumerate(words):
             if w["voc"]:
                 add(addressed, vocative(words, i, markers), s, a, ADDR_VOC)
@@ -838,7 +845,8 @@ def voices(verses, in_story):
                 add(addressed, "god", s, a, ADDR_PRAYER)
             if w["lem"] == "قال" and w["pos"] == "V":
                 if "IMPV" in w["tags"] and w["person"] == "2MS":
-                    if story in (None, "muhammad"):  # ﴿قل﴾ في غير قصص الأنبياء السابقين
+                    # ﴿قل﴾ في غير قصص الأنبياء السابقين (أما في قصة أصحاب الكهف فخطاب للنبي ﷺ)
+                    if story is None or story == "muhammad" or story.startswith("u:"):
                         add(addressed, "prophet", s, a, ADDR_QUL)
                         add(speaking, "prophet", s, a, SPEAK_QUL)
                     spoken_by_other = True
@@ -857,6 +865,7 @@ def voices(verses, in_story):
                 add(speaking, "god", s, a, SPEAK_WE)
             elif not spoken_by_other and "1S" in w["suf"] and w["lem"] in DIVINE_OWN and not w["voc"]:
                 add(speaking, "god", s, a, SPEAK_WE)
+        carried = spoken_by_other
     return addressed, speaking
 
 

@@ -226,6 +226,13 @@ def root_features(verse):
     return feats
 
 
+def tfidf_vector(feats, idf):
+    """متجه TF-IDF موحّد الطول لسمات آية (root_features)."""
+    vec = {k: (1 + math.log(tf)) * idf[k] for k, tf in feats.items()}
+    norm = math.sqrt(sum(x * x for x in vec.values())) or 1.0
+    return {k: x / norm for k, x in vec.items()}
+
+
 def root_similarity(verses):
     """تشابه جيب التمام بين متجهات TF-IDF للجذور واللمّات."""
     n = len(verses)
@@ -235,12 +242,7 @@ def root_similarity(verses):
         for k in f:
             df[k] += 1
     idf = {k: math.log(n / d) for k, d in df.items()}
-
-    vectors = []
-    for f in feats:
-        vec = {k: (1 + math.log(tf)) * idf[k] for k, tf in f.items()}
-        norm = math.sqrt(sum(x * x for x in vec.values())) or 1.0
-        vectors.append({k: x / norm for k, x in vec.items()})
+    vectors = [tfidf_vector(f, idf) for f in feats]
 
     postings = defaultdict(list)
     for i, vec in enumerate(vectors):
@@ -557,7 +559,11 @@ CONTEXT_CONTINUATION = {"illa": 6, "gen": 7, "yawm": 8, "ulaika": 9, "idha": 10,
 # التعليل (﴿ذلك بأنهم…﴾) والغاية (لام التعليل: ﴿ليجزي الذين آمنوا﴾) في أول الآية يبيّنان ما قبلها، لكن
 # إدخالهما في ترتيب الروابط أخّر أمثلة صحيحة (الإضافية 0.33 ← 0.32)، فيُعرضان في صفحة الآية وحدهما
 # (quran.json: "explains") ولا يدخلان في الحساب
-_CAUSE = re.compile(r"^ذلكم?ب")
+def _is_cause(words):
+    """﴿ذلك بأن…﴾، ﴿ذلكم بما…﴾: أول الآية ﴿ذلك﴾ أو ﴿ذلكم﴾ وكلمتها الثانية تبدأ بالباء
+    (لا ﴿ذلك مبلغهم﴾، فالحروف لا تُدمج)."""
+    return (len(words) > 1 and normalize(words[0]["text"]) in ("ذلك", "ذلكم")
+            and normalize(words[1]["text"]).startswith("ب"))
 # ﴿خير/شر من ذلك(م)﴾ مفاضلة تشير إلى ما في الآية السابقة (آل عمران 15، المائدة 60، الحج 72)
 CONTEXT_COMPARISON = 14
 _COMPARISON = re.compile("(خير|شر)منذلك")
@@ -887,6 +893,7 @@ def build_related(verses):
         return len(clauses[i]) - 1 if j == i + 1 else 0 if j == i - 1 else None
 
     related = {}
+    vectors = None  # متجهات الآيات بالجذور كلها، تُحسب عند الحاجة إليها في weak_links
     for i, v in enumerate(verses):
         # إذا وردت عبارة الآية (مثل ﴿يوم الدين﴾) في آية سُئل فيها عنها،
         # فجواب ذلك السؤال يبيّن العبارة هنا أيضًا: ﴿مالك يوم الدين﴾ ← الانفطار 19
@@ -968,31 +975,25 @@ def build_related(verses):
             if clause is not None:
                 items[-1].append(clause)
         if not items:
-            items = weak_links(verses, i, idf)
+            if vectors is None:
+                vectors = [tfidf_vector(root_features(u), idf) for u in verses]
+            items = weak_links(verses, i, vectors)
         related[f"{v['s']}:{v['a']}"] = items
     return related
 
 
-def weak_links(verses, i, idf):
+def weak_links(verses, i, vectors):
     """آية لم يُعثر لها على رابط (﴿والأرض وما طحاها﴾، ﴿الله الصمد﴾، ﴿ذواتا أفنان﴾): أقرب الآيات إليها
     بالجذور كلها ولو كانت شائعة (﴿والأرض بعد ذلك دحاها﴾، ﴿الله لا إله إلا هو الحي القيوم﴾)، والسياق
     CONTEXT_WEAK ينبّه القارئ على أنه رابط ضعيف."""
-    feats = root_features(verses[i])
-    if not feats:
+    mine = vectors[i]
+    if not mine:
         return []
-
-    def vector(f):
-        vec = {k: (1 + math.log(tf)) * idf[k] for k, tf in f.items()}
-        norm = math.sqrt(sum(x * x for x in vec.values())) or 1.0
-        return {k: x / norm for k, x in vec.items()}
-
-    mine = vector(feats)
     near = []
     for j, u in enumerate(verses):
         if j == i or abs(j - i) == 1 and u["s"] == verses[i]["s"]:
             continue
-        theirs = vector(root_features(u))
-        score = sum(x * theirs.get(k, 0.0) for k, x in mine.items())
+        score = sum(x * vectors[j].get(k, 0.0) for k, x in mine.items())
         if score > 0:
             near.append((score, j))
     near.sort(key=lambda t: (-t[0], t[1]))
@@ -1021,12 +1022,13 @@ def build_quran(verses, clauses=None):
     explains = {}
     for k, v in enumerate(verses):
         if k and verses[k - 1]["s"] == v["s"]:
-            flat = "".join(normalize(w["text"]) for w in v["words"])
-            if _CAUSE.match(flat):
+            if _is_cause(v["words"]):
                 explains[f"{v['s']}:{v['a']}"] = "cause"
             elif v.get("start") == "purpose":
                 explains[f"{v['s']}:{v['a']}"] = "purpose"
     result["explains"] = explains
+    # الآيات التي هي حروف مقطعة أو تبدأ بها (وسم INL في بيانات الصرف): ﴿الم﴾، ﴿حم ۝ عسق﴾، ﴿ص والقرآن﴾
+    result["initials"] = [f"{v['s']}:{v['a']}" for v in verses if v["words"] and v["words"][0]["initials"]]
     if clauses:
         # جمل الآية بحسب الوقف: "سورة:آية" -> [عدد كلمات الجمل قبل كل حدّ]، للآيات ذات أكثر من جملة
         result["waqf"] = {f"{v['s']}:{v['a']}": [end for _, end in spans[:-1]]

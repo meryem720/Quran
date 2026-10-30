@@ -52,6 +52,8 @@ class OrderTest(unittest.TestCase):
         self.assertTrue(self.covers("adam", 5, 27, 31))  # ﴿ابني آدم﴾ لا ﴿بني إسرائيل﴾ بعدها
         self.assertTrue(self.covers("u:kahf", 18, 9, 25))
         self.assertTrue(self.covers("u:dhulqarnayn", 18, 83, 98))
+        # ﴿ونفخ في الصور﴾ بعدها مشهد الساعة لا تتمة القصة
+        self.assertNotIn("u:dhulqarnayn", self.era_of.get((18, 99), []))
         self.assertTrue(self.covers("salih", 7, 73, 79))
         self.assertTrue(self.covers("hud", 7, 65, 72))  # ﴿من بعد قوم نوح﴾ في قصة هود ذكر عابر
 
@@ -111,6 +113,10 @@ class OrderTest(unittest.TestCase):
         self.assertNotIn((12, 43), self.voice("speakers", "angels"))  # ﴿وقال الملِك﴾ ملك مصر
         self.assertIn((40, 49), self.voice("speakers", "fire"))  # ﴿وقال الذين في النار﴾
         self.assertNotIn((40, 49), self.voice("speakers", "hypocrites"))
+        # ﴿قالوا إنا أرسلنا إلى قوم مجرمين ۝ لنرسل عليهم حجارة من طين﴾: الملائكة لا الله
+        self.assertNotIn((51, 33), self.voice("speakers", "god"))
+        # ﴿قل ربي أعلم بعدتهم﴾ في قصة أصحاب الكهف خطاب للنبي ﷺ
+        self.assertIn((18, 22), self.voice("addressees", "prophet"))
         # ﴿عما يقولون ليمسن الذين كفروا﴾: ﴿الذين كفروا﴾ مقول لا قائل
         self.assertNotIn((5, 73), self.voice("speakers", "disbelievers"))
 
