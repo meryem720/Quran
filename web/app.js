@@ -1014,7 +1014,7 @@ function renderStory(id) {
   app.innerHTML = `
     ${orderNav("stories")}
     <section class="card">
-      <h2>قصة ${escapeHtml(story.name)} <small>${T.countAr(passages.length, "passage")} · ${T.countAr(versesIn(passages), "ayah")}</small></h2>
+      <h2>${escapeHtml(story.name)} <small>القصة في ${T.countAr(passages.length, "passage")} · ${T.countAr(versesIn(passages), "ayah")}</small></h2>
       <p>الحقبة: ${lead ? eraTitle(lead.era) : ""}</p>
       ${people.length > 1 || people[0] ? `<div class="topics-grid">${people.map(charLink).join("")}</div>` : ""}
       <p class="refs">${passages.map(rangeLink).join(" · ")}</p>
@@ -1024,7 +1024,7 @@ function renderStory(id) {
     ${others.length ? `<section class="card"><h3>ويُذكرون خارج هذه المقاطع في</h3>
       <p class="refs">${others.map(([s, a, ref]) => `<a href="#${s}:${a}">${refLabel(s, a)}</a>${ref ? " (ذكر عابر)" : ""}`).join("، ")}</p></section>` : ""}`;
   pagedList(passages, (p) => passageCard(p, { parallels: true }), ORDER_PAGE);
-  document.title = `قصة ${story.name} · ترتيب القرآن`;
+  document.title = `${story.name} · القصص · ترتيب القرآن`;
 }
 
 function renderCharacters() {
@@ -1075,7 +1075,7 @@ function renderCharacter(id) {
       <p>الحقبة: ${eraTitle(c.era)}</p>
       <p>يُذكر في ${T.countAr(c.mentions.length, "ayah")}${said.length ? ` · يتكلم في ${T.countAr(said.length, "ayah")}` : ""}${called.length
         ? ` · يُنادى في ${T.countAr(called.length, "ayah")}` : ""}${passages.length
-        ? ` · <a href="#order/story/${story.id}">قصة ${escapeHtml(story.name)} في ${T.countAr(passages.length, "passage")}</a>` : ""}</p>
+        ? ` · القصة: <a href="#order/story/${story.id}">${escapeHtml(story.name)}</a> (${T.countAr(passages.length, "passage")})` : ""}</p>
       <h3>مواضع ذكره</h3>
       <p class="refs">${[...bySurah.entries()].map(([s, links]) => `${state.surahs[s - 1].name}: ${links.join("، ")}`).join(" · ")}</p>
       <p class="hint">الرقم الباهت ذكرٌ عابر (﴿من بعد قوم نوح﴾، ﴿ملة إبراهيم﴾).</p>
@@ -1173,9 +1173,11 @@ function verseOrderHtml(s, a) {
   if (!state.order) return "";
   const key = `${s}:${a}`;
   const parts = [];
-  const era = state.orderEraOf.get(key);
-  if (era) {
+  const place = state.orderEraOf.get(key);
+  if (place) {
+    const { era, passage, story } = place;
     const title = era.id === "unplaced" ? "قصص لا يحدد النص زمنها" : era.title;
+    if (story) parts.push(`القصة: <a href="#order/story/${story.id}">${escapeHtml(story.name)}</a> (${rangeLink(passage)})`);
     parts.push(`الزمن: <a href="#order/time/${era.id}">${escapeHtml(title)}</a>`);
   }
   const voice = (map, label, one) => {
@@ -1190,8 +1192,27 @@ function verseOrderHtml(s, a) {
 function indexOrder(order) {
   state.order = order;
   order.characters.forEach((c) => state.orderChars.set(c.id, c));
-  const mark = (era, [s, a1, a2]) => {
-    for (let a = a1; a <= a2; a++) if (!state.orderEraOf.has(`${s}:${a}`)) state.orderEraOf.set(`${s}:${a}`, era);
+  // قصة المقطع: القصة التي يُذكر أصحابها في أكثر آياته
+  const storyOf = new Map();
+  order.stories.forEach((story) => story.members.forEach((id) => {
+    (state.orderChars.get(id) || { mentions: [] }).mentions.forEach(([s, a, ref]) => {
+      if (ref) return;
+      const k = `${s}:${a}`;
+      if (!storyOf.has(k)) storyOf.set(k, new Set());
+      storyOf.get(k).add(story);
+    });
+  }));
+  const mark = (era, passage) => {
+    const [s, a1, a2] = passage;
+    let story = null;
+    if (era.id !== "hour" && era.id !== "creation") {
+      const votes = new Map();
+      for (let a = a1; a <= a2; a++) (storyOf.get(`${s}:${a}`) || []).forEach((x) => votes.set(x, (votes.get(x) || 0) + 1));
+      story = [...votes.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] || null;
+    }
+    for (let a = a1; a <= a2; a++) {
+      if (!state.orderEraOf.has(`${s}:${a}`)) state.orderEraOf.set(`${s}:${a}`, { era, passage, story });
+    }
   };
   order.eras.forEach((e) => e.passages.forEach((p) => mark(e, p)));
   order.unplaced.stories.forEach((u) => u.passages.forEach((p) => mark({ id: "unplaced", title: "" }, p)));

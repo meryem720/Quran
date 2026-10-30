@@ -67,7 +67,10 @@ def parse_words(path=build.MORPH_FILE):
         word["nt"] = norm(word["text"])
         word.setdefault("person", "")
         verses[(s, a)].append(word)
-    return [{"s": s, "a": a, "words": verses[(s, a)]} for (s, a) in sorted(verses)]
+    # ما يبدأ به الكلام المتصل بما قبله (﴿إيلافهم﴾ بعد ﴿لإيلاف قريش﴾، ﴿إلا﴾، ﴿يوم﴾): build._start_kind
+    first = {(s, a): [(pos, tags) for _, pos, tags in segs[(s, a, 1)]] for (s, a) in verses}
+    return [{"s": s, "a": a, "words": verses[(s, a)], "start": build._start_kind(first[(s, a)])}
+            for (s, a) in sorted(verses)]
 
 
 # ---------- مطابقة العلامات ----------
@@ -566,7 +569,9 @@ def analyze(verses, debug=None):
                     chars[ident] = chars.get(ident, True) and ref
         if chars:
             mentions[key] = chars
-        by_surah[v["s"]].append([v["a"], strong, weak - strong, narrative_kind(v["words"])])
+        # الآية التي لا يُبتدأ بها كلام تتمة لما قبلها، فهي من قصته
+        kind = "narr" if v["start"] and v["start"] != "yawm" else narrative_kind(v["words"])
+        by_surah[v["s"]].append([v["a"], strong, weak - strong, kind])
 
     passages = []
     in_story = set()
