@@ -146,16 +146,20 @@ def _start_kind(segments):
 def _cause(first, second):
     """﴿ذلك بأن…﴾، ﴿ذلكم بما…﴾: أول الآية اسم الإشارة ﴿ذلك﴾ وفي أول الثانية باء الجر سابقةً
     (لا ﴿ذلك مبلغهم﴾ ولا ﴿ذلك بعيد﴾، فالباء فيهما من أصل الكلمة)."""
-    return (bool(first) and "DEM" in first[0][1] and "LEM:ذا" in first[0][1]
+    stems = [tags for _, tags in first if "PREF" not in tags]
+    return (bool(stems) and "DEM" in stems[0] and "LEM:ذا" in stems[0]
             and any("DIST" in tags for _, tags in first)
             and bool(second) and "PREF" in second[0][1] and "LEM:ب" in second[0][1])
 
 
 def _purpose(segments):
-    """لام التعليل في أول الآية ثم فعل: ﴿ليجزي الذين آمنوا﴾ غاية ما قبلها."""
+    """لام التعليل في أول الآية ثم فعل، ولو بعد واو أو فاء: ﴿ليجزي الذين آمنوا﴾، ﴿وليمحص الله الذين
+    آمنوا﴾ غاية ما قبلها."""
     prefixes = [tags for _, tags in segments if "PREF" in tags]
     stems = [(pos, tags) for pos, tags in segments if "PREF" not in tags and "SUFF" not in tags]
-    return bool(prefixes and "PRP" in prefixes[0] and stems and stems[0][0] == "V")
+    k = next((k for k, tags in enumerate(prefixes) if "PRP" in tags), None)
+    return bool(k is not None and all("LEM:و" in tags or "LEM:ف" in tags for tags in prefixes[:k])
+                and stems and stems[0][0] == "V")
 
 
 def _fa_past_third(segments):

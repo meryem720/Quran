@@ -45,7 +45,15 @@ class CleanTest(unittest.TestCase):
         self.assertEqual(dictionary.clean("شجر وهو نوع من الطرفاء الواحدة أثلة"), "شجر وهو نوع من الطرفاء")
         # ضبط أو تصريف قبل المعنى
         self.assertEqual(dictionary.clean("وضم الثاء العقوبة"), "العقوبة")
-        self.assertEqual(dictionary.clean("مصدر الأخرق وهو ضد الرفيق"), "ضد الرفيق")
+        self.assertEqual(dictionary.clean("وضم الثاء وهو العقوبة"), "العقوبة")
+        # «مصدر الأخرق وهو…» معنى لفظ آخر بضبط آخر، و«مصدر وهو شاذ… أي فصله» ليس معنى
+        self.assertEqual(dictionary.clean("مصدر الأخرق وهو ضد الرفيق"), "")
+        self.assertEqual(dictionary.clean("مصدر وهو شاذ لأن المصادر إنما تجيء على التفعال أي فصله"), "")
+        # المعنى الذي أوله «ضم/فتح/كسر» بلا واو يبقى
+        self.assertEqual(dictionary.clean("ضم الشيء إلى الشيء"), "ضم الشيء إلى الشيء")
+        # الجمع في وسط التعريف أو أوله يُقطع عنده
+        self.assertEqual(dictionary.clean("الأمعاء جمع حوية"), "الأمعاء")
+        self.assertEqual(dictionary.clean("جمعها في القلة أبور كأفلس"), "")
         # المعنى القصير يبقى («الكافور: من الطيب»، «الدُّولة: في المال»)، والاسم الذي أوله واو
         self.assertEqual(dictionary.clean("من الطيب"), "من الطيب")
         self.assertEqual(dictionary.clean("وعاء"), "وعاء")

@@ -86,6 +86,8 @@ class PipelineTest(unittest.TestCase):
         explains = build.build_quran(self.verses)["explains"]
         self.assertEqual(explains["2:176"], "cause")
         self.assertEqual(explains["30:45"], "purpose")
+        self.assertEqual(explains["3:141"], "purpose")  # ﴿وليمحص الله الذين آمنوا﴾: واو ثم لام التعليل
+        self.assertNotIn("53:30", explains)  # ﴿ذلك مبلغهم من العلم﴾ ليست تعليلًا
         self.assertTrue(self.verses[self.index[(30, 45)]]["purpose"])
         self.assertIsNone(self.verses[self.index[(30, 45)]]["start"])
         links = build.context_links(self.verses)
