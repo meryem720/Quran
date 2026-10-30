@@ -275,3 +275,34 @@ button.more {
 .clause-group h3 { font-size: 1.05rem; font-weight: normal; margin: 22px 0 8px; color: var(--muted); }
 .clause-group h3 .q { font-family: var(--quran-font); font-size: 1.25rem; color: var(--text); }
 .clause-group h3 .clause-num { vertical-align: middle; font-size: 0.8rem; }
+
+/* ---------- العرض المبسّط ومختبر الفرضيات ---------- */
+
+.view-toggle { margin: -4px 0 8px; font-size: 0.9rem; color: var(--muted); }
+.view-toggle button, .lab-row button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 2px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+.view-toggle button.on { background: var(--accent-soft); border-color: var(--accent); }
+.lab-box input {
+  font: inherit;
+  width: 100%;
+  margin-top: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+.lab-counts { font-weight: 600; color: var(--accent); }
+.lab-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.lab-row button[data-lab="yes"].on { background: var(--accent-soft); border-color: var(--accent); }
+.lab-row button[data-lab="no"].on { background: var(--chip-context); border-color: var(--muted); }
+.lab-row button[data-lab="open"].on { background: var(--chip-phrase); border-color: var(--muted); }
+.absent { color: var(--text); }

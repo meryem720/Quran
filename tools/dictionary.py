@@ -6,6 +6,9 @@
 الروابط بين الآيات (جُرّب ذلك فلم يحسّن النتائج، انظر README)، بل تُعرض للقارئ عند النقر
 على اللفظ، وكل كلمة من المعنى ترد في القرآن تفتح مواضعها فيه.
 
+وللجذور الشائعة التي يحمل أصلها أكثر من معنى (كلم، ضرب، حيي…) تُعرض مادة المعجم كاملة بعد حذف
+كل ما يعلّق على آية، في web/data/root_senses.json.
+
 الاستعمال:
     python3 tools/dictionary.py           # ينزّل نص المعجم (نسخة ثابتة) ← web/data/glosses.json
     python3 tools/dictionary.py FILE      # من نسخة محلية من الملف نفسه
@@ -28,6 +31,18 @@ SOURCE_URL = (
     "0666IbnAbiBakrZaynDinRazi.MukhtarSihah.JK000107-ara1"
 )
 OUT_FILE = os.path.join(build.OUT_DIR, "glosses.json")
+ROOTS_FILE = os.path.join(build.OUT_DIR, "root_senses.json")
+
+# جذور شائعة يحمل أصلها أكثر من معنى («الكَلْم» في اللغة الجرح): تُعرض مادتها كاملة
+ROOT_SENSES = ("كلم", "ضرب", "حيي", "كفر", "فسق", "نشز", "ضلل", "نسو", "نسأ")
+# اسم المادة في المعجم إذا خالف جذر بيانات الصرف («ح ي و»)، أو أخطأ تحويل النص عنوانها
+# («ك ل م» مكتوبة «ك م م»؛ ويُميَّز ما فيها بحروف الجذر، انظر root_entry)
+DICT_ROOT = {"حيي": "حيو", "كلم": "كمم"}
+MAX_ENTRY_CHARS = 700
+MAX_CLAUSE_CHARS = 170
+# في المادة الكاملة: ما بعد هذه الكلمات تعليق على آية أو قراءة أو حديث أو نبي، فيُقطع عندها
+_VERSE_TALK = re.compile(r"(?:@QB@|@QE@|قوله|تعالى|قرأ|قراءة|قرئ|الحديث|في الآية|القرآن"
+                         r"|عليه السلام|صلى الله|رضي الله|فسره|المفسر)")
 
 # غريب القرآن: الألفاظ التي لا ترد إلا في هذا العدد من الآيات أو أقل
 MAX_VERSES = 20
@@ -119,6 +134,44 @@ def build_glosses(text, verses):
     return glosses
 
 
+def _subsequence(word, letters):
+    it = iter(word)
+    return all(ch in it for ch in letters)
+
+
+def root_entry(text, root):
+    """مادة الجذر في المعجم، جملةً جملة، بلا تعليق على آية: «ضرب في الأرض… أي سار لابتغاء الرزق»."""
+    letters = build.normalize(root)[:2]
+    parts = []
+    for key, body in entries(text):
+        if key != DICT_ROOT.get(root, root):
+            continue
+        for clause in re.split(r"\s+و\s+", body):
+            kept = _VERSE_TALK.split(clause)[0]
+            words = kept.split()
+            # ما قُطع عنده التعليق: الكلمة المعطوفة قبله تابعة له («التكليم التجريح وعيسى…»)
+            if kept != clause and words and words[-1].startswith("و"):
+                words.pop()
+            # وما بقي قبل الآية المحذوفة: «النسيان أيضا الترك قال الله ﴿…﴾»
+            while words and (words[-1] in ("و", "أي", "يقال", "ويقال", "قال", "وقال", "ومنه")
+                             or (words[-1] == "الله" and len(words) > 1 and words[-2] in ("قال", "وقال"))):
+                words.pop()
+            if len(words) < 2 or not any(_subsequence(build.normalize(w), letters) for w in words[:2]):
+                continue
+            text_ = " ".join(words)
+            if len(text_) > MAX_CLAUSE_CHARS:
+                text_ = text_[:MAX_CLAUSE_CHARS].rsplit(" ", 1)[0] + "…"
+            if text_ not in parts:
+                parts.append(text_)
+    result, size = [], 0
+    for part in parts:
+        if size + len(part) > MAX_ENTRY_CHARS:
+            break
+        result.append(part)
+        size += len(part)
+    return result
+
+
 def main():
     if len(sys.argv) > 1:
         with open(sys.argv[1], encoding="utf-8") as f:
@@ -131,6 +184,10 @@ def main():
     with open(OUT_FILE, "w", encoding="utf-8") as f:
         json.dump(glosses, f, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     print(f"معاني {len(glosses)} لفظًا ← {OUT_FILE}", file=sys.stderr)
+    roots = {root: root_entry(text, root) for root in ROOT_SENSES}
+    with open(ROOTS_FILE, "w", encoding="utf-8") as f:
+        json.dump({k: v for k, v in roots.items() if v}, f, ensure_ascii=False, separators=(",", ":"))
+    print(f"مواد {sum(1 for v in roots.values() if v)} جذرًا ← {ROOTS_FILE}", file=sys.stderr)
 
 
 if __name__ == "__main__":
