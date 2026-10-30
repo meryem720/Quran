@@ -120,6 +120,8 @@ def _start_kind(segments):
     """
     prefixes = [tags for _, tags in segments if "PREF" in tags]
     stems = [(pos, tags) for pos, tags in segments if "PREF" not in tags and "SUFF" not in tags]
+    if prefixes and "PRP" in prefixes[0] and stems and stems[0][0] == "V":
+        return "purpose"  # لام التعليل: ﴿ليجزي الذين آمنوا﴾ غاية ما قبلها
     if (stems and len(prefixes) == 1 and "LEM:ف" in prefixes[0] and "LEM:مَن" in stems[0][1]
             and {"COND", "REL", "INTG"} & set(stems[0][1])):
         return "faman"
@@ -552,6 +554,10 @@ CONTEXT_DIALOGUE = 4  # سؤال قصير يُجاب عنه في الآية ال
 CONTEXT_ANSWER_ELSEWHERE = 5  # العبارة نفسها سُئل عنها في موضع آخر وأُجيب
 # كلام متصل: الآية الثانية تبدأ بما لا يُبتدأ به (انظر _start_kind)
 CONTEXT_CONTINUATION = {"illa": 6, "gen": 7, "yawm": 8, "ulaika": 9, "idha": 10, "bala": 12, "faman": 13}
+# التعليل (﴿ذلك بأنهم…﴾) والغاية (لام التعليل: ﴿ليجزي الذين آمنوا﴾) في أول الآية يبيّنان ما قبلها، لكن
+# إدخالهما في ترتيب الروابط أخّر أمثلة صحيحة (الإضافية 0.33 ← 0.32)، فيُعرضان في صفحة الآية وحدهما
+# (quran.json: "explains") ولا يدخلان في الحساب
+_CAUSE = re.compile(r"^ذلكم?ب")
 # ﴿خير/شر من ذلك(م)﴾ مفاضلة تشير إلى ما في الآية السابقة (آل عمران 15، المائدة 60، الحج 72)
 CONTEXT_COMPARISON = 14
 _COMPARISON = re.compile("(خير|شر)منذلك")
@@ -561,6 +567,8 @@ CONTEXT_ASKED = 15
 CONTEXT_NARRATIVE = 16
 NARRATIVE_SHARE = 0.5
 _ASKED = ("يسلونك", "ويسلونك")
+# نصيب السياق من الدرجة: القصّ المتتابع دون الجواب والكلام المتصل
+CONTEXT_SHARE = {CONTEXT_NARRATIVE: NARRATIVE_SHARE}
 ASKED_ROOT_DF = 400
 CONTEXT_PARALLEL = 11  # [11، سورة المقطع المقابل، أول آية، آخر آية]: القصة نفسها في موضع آخر
 CONTEXT_INITIALS = 17  # تُفتتح السورتان بالحروف المقطعة نفسها (﴿الم﴾، ﴿حم﴾، ﴿طسم﴾)
@@ -666,7 +674,7 @@ def context_links(verses):
             continue
         if first in _RELATIVE_START:
             add(prev_i, i, CONTEXT_RELATIVE)
-        elif v.get("start") and i not in links[prev_i]:
+        elif v.get("start") in CONTEXT_CONTINUATION and i not in links[prev_i]:
             # لا يحل محل سبب أدق: ﴿هل أتاك حديث الجنود ۝ فرعون وثمود﴾ جواب قبل أن يكون بدلًا
             add(prev_i, i, CONTEXT_CONTINUATION[v["start"]])
         if (ASKED_ROOT_DF and normalize(verses[prev_i]["words"][0]["text"]) in _ASKED and i not in links[prev_i]
@@ -907,7 +915,7 @@ def build_related(verses):
             q = root_pairs[i].get(j, 0.0) if ROOTPAIR_ADD or not (p or e) else 0.0
             c = 0.0
             if j in context.get(i, {}):
-                c = NARRATIVE_SHARE if context[i][j] == CONTEXT_NARRATIVE else 1.0
+                c = CONTEXT_SHARE.get(context[i][j], 1.0)
             if not c and j in elsewhere:
                 # بقدر تطابق العبارة مع آية السؤال
                 c = elsewhere[j][0]
@@ -1009,6 +1017,16 @@ def build_quran(verses, clauses=None):
     # اللمّات الفعلية: تمييز الفعل من الاسم يفرّق «صَبَرَ» عن «جِنَّة» عند اتفاق الكتابة
     verbs = sorted({w["lemma"] for v in verses for w in v["words"] if w["verb"] and w["lemma"]})
     result = {"surahs": surahs, "verbs": verbs}
+    # الآية تبيّن ما قبلها: سببه (﴿ذلك بأنهم…﴾) أو غايته (﴿ليجزي…﴾)
+    explains = {}
+    for k, v in enumerate(verses):
+        if k and verses[k - 1]["s"] == v["s"]:
+            flat = "".join(normalize(w["text"]) for w in v["words"])
+            if _CAUSE.match(flat):
+                explains[f"{v['s']}:{v['a']}"] = "cause"
+            elif v.get("start") == "purpose":
+                explains[f"{v['s']}:{v['a']}"] = "purpose"
+    result["explains"] = explains
     if clauses:
         # جمل الآية بحسب الوقف: "سورة:آية" -> [عدد كلمات الجمل قبل كل حدّ]، للآيات ذات أكثر من جملة
         result["waqf"] = {f"{v['s']}:{v['a']}": [end for _, end in spans[:-1]]

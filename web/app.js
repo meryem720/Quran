@@ -55,6 +55,7 @@ const state = {
   verseIndex: new Map(), // "s:a" -> رقم الآية في فهرس الموضوعات
   glosses: {},    // لمّة موحّدة -> {h: اللفظ في المعجم، d: [معانيه]} (مختار الصحاح)
   waqf: {},       // "s:a" -> [عدد كلمات الجمل قبل كل حدّ وقف] للآيات ذات أكثر من جملة
+  explains: {},   // "s:a" -> "cause" | "purpose": الآية تبيّن سبب ما قبلها أو غايته
   rootSenses: {}, // جذر -> [جمل مادته في المعجم] للجذور الشائعة متعددة المعنى (مختار الصحاح)
   lemmaText: new Map(), // لمّة موحّدة -> كتابتها بلا تشكيل، للألفاظ ذات الجذر
   order: null,     // بيانات الترتيب (tools/order.py)
@@ -227,6 +228,7 @@ function renderVerse(s, a) {
       ${verseHtml(s, a, { clickable: true, clauseEnds: ends })}
       ${next}
       ${passagesHtml}
+      ${explainsHtml(s, a)}
       ${verseOrderHtml(s, a)}
     </section>
     <div class="pager">${prevLink}${nextLink}</div>
@@ -238,6 +240,17 @@ function renderVerse(s, a) {
     ${relatedHtml}
   `;
   document.title = `${refLabel(s, a)} · تفسير القرآن بالقرآن`;
+}
+
+// التعليل والغاية بين الآية وجارتها، من أول الآية الثانية (﴿ذلك بأنهم…﴾، لام التعليل ﴿ليجزي…﴾)
+const EXPLAINS = { cause: ["سبب ما", "﴿ذلك بأن…﴾"], purpose: ["الغاية مما", "لام التعليل"] };
+function explainsHtml(s, a) {
+  const notes = [];
+  const next = state.explains[`${s}:${a + 1}`];
+  if (next) notes.push(`<a href="#${s}:${a + 1}">الآية التالية</a> تبيّن ${EXPLAINS[next][0]} في هذه (${EXPLAINS[next][1]} في أولها).`);
+  const own = state.explains[`${s}:${a}`];
+  if (own) notes.push(`هذه الآية تبيّن ${EXPLAINS[own][0]} في <a href="#${s}:${a - 1}">الآية السابقة</a> (${EXPLAINS[own][1]} في أولها).`);
+  return notes.length ? `<p class="hint">${notes.join(" ")}</p>` : "";
 }
 
 // آية لا يشترك لفظها مع غيرها إلا في ألفاظ شائعة: بيانها الأقرب سياقها، ومعنى ألفاظها في المعجم
@@ -1386,6 +1399,7 @@ async function init() {
     state.glosses = glosses;
     state.rootSenses = rootSenses;
     state.waqf = quran.waqf || {};
+    state.explains = quran.explains || {};
     if (order) indexOrder(order);
     state.topicIndex = T.buildIndex(quran);
     state.topicIndex.verses.forEach((v, i) => state.verseIndex.set(`${v.s}:${v.a}`, i));
