@@ -345,3 +345,18 @@ button.more {
 .ref-mention { opacity: 0.55; }
 .singles { padding: 12px 20px; }
 .verse-order { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 6px; }
+.alone p { margin: 4px 0; }
+.alone .q, .initials .q { font-family: var(--quran-font); font-size: 1.15em; }
+.initials { margin: 4px 0; padding-inline-start: 20px; }
+
+@media (max-width: 600px) {
+  /* شريط الأعلى لا يلتصق في الهاتف حتى لا يحجب نصف الشاشة */
+  .top { position: static; padding: 8px 12px; gap: 6px 12px; }
+  .top h1 { font-size: 1.1rem; }
+  .controls { gap: 6px; }
+  .controls select { flex: 1 1 7em; min-width: 0; }
+  #ayah { width: 4.2em; }
+  .nav-link { padding: 3px 10px; }
+  main { padding: 12px; }
+  .card { padding: 14px 14px; }
+}

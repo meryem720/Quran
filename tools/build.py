@@ -172,7 +172,9 @@ def parse_morphology(path):
                 third_person.add((s, a))
             words = verses.setdefault((s, a), {})
             word = words.setdefault(w, {"text": "", "root": None, "lemma": None, "name": False, "verb": False,
-                                        "conj": False})
+                                        "conj": False, "initials": False})
+            if "INL" in tags.split("|"):
+                word["initials"] = True  # الحروف المقطعة: ﴿الم﴾، ﴿حم﴾
             word["text"] += form
             parts = tags.split("|")
             if _seg == 1 and "PREF" in parts and ("LEM:و" in parts or "LEM:ف" in parts):
@@ -198,7 +200,7 @@ def parse_morphology(path):
             # قصّ متتابع: فاء ثم فعل ماضٍ لغائب، وفي الآية ضمير غائب (﴿قالت نملة… ۝ فتبسم ضاحكا من قولها﴾)
             "narrative": (s, a) in third_person and _fa_past_third(first_word[(s, a)]),
             "words": [
-                {k: words[w][k] for k in ("text", "root", "lemma", "name", "verb", "conj")}
+                {k: words[w][k] for k in ("text", "root", "lemma", "name", "verb", "conj", "initials")}
                 for w in sorted(words)
             ],
         })
@@ -561,6 +563,9 @@ NARRATIVE_SHARE = 0.5
 _ASKED = ("يسلونك", "ويسلونك")
 ASKED_ROOT_DF = 400
 CONTEXT_PARALLEL = 11  # [11، سورة المقطع المقابل، أول آية، آخر آية]: القصة نفسها في موضع آخر
+CONTEXT_INITIALS = 17  # تُفتتح السورتان بالحروف المقطعة نفسها (﴿الم﴾، ﴿حم﴾، ﴿طسم﴾)
+CONTEXT_WEAK = 18      # آية لا يربطها بغيرها إلا ألفاظ شائعة: أقرب ما يشبهها، ويُنبَّه على ضعفه
+WEAK_COUNT = 3
 # لا يُنقل إلى المواضع الأخرى إلا جواب السؤال: أما الكلام المتصل فيصف موضعه وحده
 # (جُرّب نقله فكانت أكثر نتائجه من الفواصل المتكررة مثل ﴿على كل شيء قدير﴾)
 _ANSWER_TYPES = (CONTEXT_ADRAKA, CONTEXT_QUESTION, CONTEXT_DIALOGUE)
@@ -622,6 +627,17 @@ def context_links(verses):
     def add(i, j, reason):
         links[i][j] = reason
         links[j].setdefault(i, reason)
+
+    # السور المفتتحة بالحروف المقطعة نفسها
+    openings = defaultdict(list)
+    for i, v in enumerate(verses):
+        if v["words"] and v["words"][0]["initials"]:
+            openings[normalize(v["words"][0]["text"])].append(i)
+    for group in openings.values():
+        for x in group:
+            for y in group:
+                if x != y:
+                    links[x][y] = CONTEXT_INITIALS
 
     for i, v in enumerate(verses):
         flat = "".join(normalize(w["text"]) for w in v["words"])
@@ -943,8 +959,41 @@ def build_related(verses):
                 items[-1].append(list(rare[i][j][1:]) if w else 0)
             if clause is not None:
                 items[-1].append(clause)
+        if not items:
+            items = weak_links(verses, i, idf)
         related[f"{v['s']}:{v['a']}"] = items
     return related
+
+
+def weak_links(verses, i, idf):
+    """آية لم يُعثر لها على رابط (﴿والأرض وما طحاها﴾، ﴿الله الصمد﴾، ﴿ذواتا أفنان﴾): أقرب الآيات إليها
+    بالجذور كلها ولو كانت شائعة (﴿والأرض بعد ذلك دحاها﴾، ﴿الله لا إله إلا هو الحي القيوم﴾)، والسياق
+    CONTEXT_WEAK ينبّه القارئ على أنه رابط ضعيف."""
+    feats = root_features(verses[i])
+    if not feats:
+        return []
+
+    def vector(f):
+        vec = {k: (1 + math.log(tf)) * idf[k] for k, tf in f.items()}
+        norm = math.sqrt(sum(x * x for x in vec.values())) or 1.0
+        return {k: x / norm for k, x in vec.items()}
+
+    mine = vector(feats)
+    near = []
+    for j, u in enumerate(verses):
+        if j == i or abs(j - i) == 1 and u["s"] == verses[i]["s"]:
+            continue
+        theirs = vector(root_features(u))
+        score = sum(x * theirs.get(k, 0.0) for k, x in mine.items())
+        if score > 0:
+            near.append((score, j))
+    near.sort(key=lambda t: (-t[0], t[1]))
+    items = []
+    for score, j in near[:WEAK_COUNT]:
+        u = verses[j]
+        shared = sorted({w["root"] for w in verses[i]["words"] if w["root"]} & {w["root"] for w in u["words"] if w["root"]})
+        items.append([u["s"], u["a"], round(score * 100), CONTEXT_WEAK, "", " ".join(shared), ""])
+    return items
 
 
 def build_quran(verses, clauses=None):

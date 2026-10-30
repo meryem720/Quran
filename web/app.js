@@ -17,7 +17,10 @@ const CONTEXT_REASONS = {
   14: "مفاضلة: ﴿خير/شر من ذلك﴾ في الثانية تشير إلى ما في الأولى",
   15: "تتمة جواب ﴿يسألونك﴾: الثانية تكمل الجواب في الأولى",
   16: "قصّ متتابع: الثانية تبدأ بفاء وفعل ماضٍ يكمل ما في الأولى",
+  17: "تُفتتح السورتان بالحروف المقطعة نفسها",
+  18: "رابط ضعيف: لا تشترك الآيتان إلا في لفظ شائع",
 };
+const WEAK = 18;
 // [11، سورة المقطع المقابل، أول آية، آخر آية]: القصة نفسها في موضع آخر
 const PARALLEL = 11;
 const MAX_RESULTS = 200;
@@ -231,9 +234,58 @@ function renderVerse(s, a) {
       : ends ? "جملةً جملة بحسب علامات الوقف في المصحف، والألفاظ المشتركة مُبرَزة · " : ""}النقر على أي كلمة يعرض مواضع جذرها في القرآن</small></h2>
     <p class="view-toggle">العرض: <button data-view="simple" class="${simple ? "on" : ""}">مبسّط</button>
       <button data-view="full" class="${simple ? "" : "on"}">كامل</button></p>
-    ${relatedHtml || `<p class="empty">لم يُعثر على آيات مرتبطة.</p>`}
+    ${aloneHtml(s, a, items)}
+    ${relatedHtml}
   `;
   document.title = `${refLabel(s, a)} · تفسير القرآن بالقرآن`;
+}
+
+// آية لا يشترك لفظها مع غيرها إلا في ألفاظ شائعة: بيانها الأقرب سياقها، ومعنى ألفاظها في المعجم
+function aloneHtml(s, a, items) {
+  const words = getVerse(s, a);
+  if (words[0] && !words[0][1] && !words[0][2]) return initialsHtml(s, a);
+  if (items.some((it) => it[3] !== WEAK)) return "";
+  const glossed = [...new Map(words.filter((w) => state.glosses[normalize(w[2])])
+    .map((w) => [normalize(w[2]), w])).values()];
+  const context = [-2, -1, 1, 2].filter((d) => getVerse(s, a + d)).map((d) => `<a href="#${s}:${a + d}">${refLabel(s, a + d)}</a>`);
+  return `
+    <section class="card alone">
+      <p>لا يشترك لفظ هذه الآية مع غيرها من الآيات إلا في ألفاظ شائعة، فأقرب بيانها من القرآن سياقها:
+        ${context.join("، ")}${items.length ? "، ثم الروابط الضعيفة أدناه" : ""}.</p>
+      ${glossed.map(([text, , lemma]) => {
+        const g = state.glosses[normalize(lemma)];
+        return `<p>﴿<span class="q">${escapeHtml(text)}</span>﴾ في المعجم: ${g.d.map(linkWords).join("؛ ")}</p>`;
+      }).join("")}
+      ${glossed.length ? `<p class="hint">${DICT_NOTE}</p>` : ""}
+    </section>`;
+}
+
+// الحروف المقطعة: السور التي تُفتتح بها، وما يليها من ذكر الكتاب (من النص نفسه)
+const BOOK_LEMMAS = new Set(["كتاب", "قرءان", "تنزيل", "انزل", "نزل", "ذكر", "اوحي"]);
+function initialsHtml(s, a) {
+  const isInitials = (words) => words && words[0] && !words[0][1] && !words[0][2];
+  const groups = new Map();
+  let withBook = 0, total = 0;
+  state.surahs.forEach((surah) => {
+    // ﴿حم ۝ عسق﴾: الآية الثانية حروف مقطعة كذلك
+    const count = isInitials(surah.verses[0]) ? (isInitials(surah.verses[1]) ? 2 : 1) : 0;
+    if (!count) return;
+    surah.verses.slice(0, count).forEach((words, i) => {
+      const letters = words[0][0];
+      if (!groups.has(normalize(letters))) groups.set(normalize(letters), { letters, refs: [] });
+      groups.get(normalize(letters)).refs.push([surah.n, i + 1]);
+    });
+    total += 1;
+    if (surah.verses.slice(0, count + 1).flat().some((w) => BOOK_LEMMAS.has(normalize(w[2])))) withBook += 1;
+  });
+  return `
+    <section class="card alone">
+      <p>حروف مقطعة. تُفتتح بها ${T.countAr(total, "surah")}${total ? `، ويُذكر معها أو في الآية التي تليها الكتاب أو القرآن
+        أو التنزيل أو الذكر في ${withBook} منها` : ""}:</p>
+      <ul class="initials">${[...groups.values()].map(({ letters, refs }) =>
+        `<li><span class="q">${escapeHtml(letters)}</span>: ${refs.map(([rs, ra]) => rs === s && ra === a
+          ? `<strong>${refLabel(rs, ra)}</strong>` : `<a href="#${rs}:${ra}">${refLabel(rs, ra)}</a>`).join("، ")}</li>`).join("")}</ul>
+    </section>`;
 }
 
 function renderList(title, matches, opts, before = "") {
@@ -474,7 +526,7 @@ function verseIndexOf(s, a) {
 function explanationItems(v, topicSet) {
   const items = state.related[`${v.s}:${v.a}`] || [];
   const inTopic = (it) => topicSet.has(verseIndexOf(it[0], it[1]));
-  const rank = (it) => (it[3] ? 0 : inTopic(it) ? 1 : 2);
+  const rank = (it) => (it[3] && it[3] !== WEAK ? 0 : inTopic(it) ? 1 : it[3] === WEAK ? 3 : 2);
   return items
     .map((it, order) => ({ it, order }))
     .sort((x, y) => rank(x.it) - rank(y.it) || x.order - y.order)
@@ -1077,7 +1129,8 @@ function renderVoice(key, arg) {
     </section>
     <div id="order-list"></div>
     <div id="order-more"></div>`;
-  pagedList(list, (x) => voiceCard(x, v.kinds), VOICE_PAGE);
+  if (list.length) pagedList(list, (x) => voiceCard(x, v.kinds), VOICE_PAGE);
+  else $("order-list").innerHTML = `<p class="empty">لا توجد آيات من هذا النوع.</p>`;
   document.title = `${v.title}: ${row.name} · ترتيب القرآن`;
 }
 
@@ -1157,6 +1210,20 @@ function route() {
   renderVerse(1, 1);
 }
 
+// «2:255»، «٢:٢٥٥»، «البقرة 255»، «سورة يس»: الانتقال إلى الآية بدل البحث
+function verseQuery(query) {
+  const q = query.replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).trim();
+  const num = q.match(/^(\d{1,3})\s*[:：\-–\s]\s*(\d{1,3})$/);
+  if (num) return `${+num[1]}:${+num[2]}`;  // وإن لم توجد الآية: «الآية غير موجودة»
+  const named = q.match(/^(سورة\s+)?(.+?)(?:\s*[:：]?\s*(\d{1,3}))?$/);
+  if (!named || (!named[1] && !named[3])) return null;  // «البقرة» وحدها موضوع
+  const name = normalize(named[2]).replace(/^سوره/, "");
+  const surah = state.surahs.find((x) => normalize(x.name) === name);
+  if (!surah) return null;
+  const a = named[3] ? +named[3] : 1;
+  return getVerse(surah.n, a) ? `${surah.n}:${a}` : null;
+}
+
 function setupControls() {
   $("surah").innerHTML = state.surahs
     .map((s) => `<option value="${s.n}">${s.n}. ${s.name}</option>`)
@@ -1184,7 +1251,7 @@ function setupControls() {
     const q = $("search").value.replace(/[|,%#]/g, " ").trim();
     if (!q) return;
     const root = q.match(/^جذر\s*[:：]\s*(.+)$/);
-    location.hash = root ? `root/${root[1].replace(/\s+/g, "")}` : topicHash(q);
+    location.hash = root ? `root/${root[1].replace(/\s+/g, "")}` : verseQuery(q) || topicHash(q);
   });
 
   // النقر على كلمة يفتح مواضع جذرها، والنقر على بطاقة يفتح الآية
@@ -1209,7 +1276,8 @@ function setupControls() {
       e.preventDefault();
       const target = $(scroll.dataset.scroll);
       const header = document.querySelector("header.top");
-      if (header) target.style.scrollMarginTop = `${header.offsetHeight + 12}px`;
+      const sticky = header && window.getComputedStyle && getComputedStyle(header).position === "sticky";
+      target.style.scrollMarginTop = sticky ? `${header.offsetHeight + 12}px` : "12px";
       target.scrollIntoView({ behavior: "smooth" });
       target.focus({ preventScroll: true });
       return;

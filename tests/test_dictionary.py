@@ -36,6 +36,18 @@ class SensesTest(unittest.TestCase):
         self.assertEqual(self.senses("مثن"), [])
 
 
+class CleanTest(unittest.TestCase):
+    def test_meaning_only(self):
+        # يُحذف التصريف والجمع والضبط، ويبقى المعنى
+        self.assertEqual(dictionary.clean("ضد الجد وقد هزل من باب ضرب"), "ضد الجد")
+        self.assertEqual(dictionary.clean("مكسور ممدود الدواء وهو الأطبة جمع الآسي مثل"), "الدواء وهو الأطبة")
+        self.assertEqual(dictionary.clean("الإعلام وأذان الصلاة معروف وقد أذن أذانا"), "الإعلام")
+        self.assertEqual(dictionary.clean("شجر وهو نوع من الطرفاء الواحدة أثلة"), "شجر وهو نوع من الطرفاء")
+        # ما ليس معنى يُترك كله
+        self.assertEqual(dictionary.clean("في الولادة"), "")
+        self.assertEqual(dictionary.clean("لا واحد لها من لفظها وهي مؤنثة لأن"), "")
+
+
 class GlossesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
