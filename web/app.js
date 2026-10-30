@@ -578,13 +578,15 @@ function renderTopic(arg) {
     }).join("");
     const missing = resolved.missing.length
       ? `<p>لم تُفهم من العبارة: ${resolved.missing.map((w) => `«${escapeHtml(w)}»`).join("، ")}.</p>` : "";
-    const absent = query.split(/\s+/).filter(Boolean).filter((w) => !occursInQuran(w));
+    const latin = !/[\u0600-\u06FF]/.test(query);
+    const absent = latin ? [] : query.split(/\s+/).filter(Boolean).filter((w) => !occursInQuran(w));
     const absentHtml = absent.length
       ? `<p class="absent"><strong>${absent.map((w) => `«${escapeHtml(w)}»`).join("، ")} ${absent.length > 1 ? "لا ترد" : "لا يرد"} في القرآن.</strong></p>` : "";
     app.innerHTML = `
       <section class="card">
         <h2>لم يُعثر على موضوع «${escapeHtml(query)}»</h2>
         ${absentHtml}
+        ${latin ? `<p>البحث بالحروف العربية: تُكتب الكلمة كما ترد في القرآن (الصلاة، الصبر، موسى)، أو موضع الآية (2:255).</p>` : ""}
         ${missing}
         ${sugg ? `<p>كلمات قريبة:</p><div class="topics-grid">${sugg}</div>` : ""}
         <p>${wordSearch} · <a href="#topics">الموضوعات المقترحة</a></p>

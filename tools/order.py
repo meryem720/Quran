@@ -709,13 +709,13 @@ VOC_ALLADHINA = {"امن": "believers", "كفر": "disbelievers", "هاد": "jew
 VOC_LEMMA = {
     "قوم": "qawm", "رب": "god", "عبد": "servants", "اولو": "ulul", "اولي": "ulul", "اب": "father",
     "معشر": "jinn_ins", "نساء": "prophet_wives", "صاحب": "prison", "ارض": "things", "سماء": "things",
-    "جبل": "things", "نار": "things", "اخت": "maryam", "ذو": "dhulqarnayn", "مالك": "malik",
+    "جبل": "things", "نار": "things", "اخت": "maryam", "مالك": "malik",
 }
 VOC_EXCLAIM = {"ويل", "ليت", "حسره", "اسف", "بشري", "ويلت"}  # ﴿يا ويلتنا﴾، ﴿يا ليتني﴾: تحسّر لا نداء
 # ﴿قال الذين …﴾ بحسب الفعل بعدها
 SAID_ALLADHINA = {
     "كفر": "disbelievers", "اشرك": "polytheists", "امن": "believers", "ظلم": "wrongdoers",
-    "استكبر": "arrogant", "استضعف": "weak", "في": "hypocrites", "لا": "unknowing", "هاد": "jews",
+    "استكبر": "arrogant", "استضعف": "weak", "لا": "unknowing", "هاد": "jews",
 }
 # فاعل القول بلمّته
 SAID_LEMMA = {
@@ -725,6 +725,7 @@ SAID_LEMMA = {
     "يهود": "jews", "نصراني": "christians", "ناس": "people", "الله": "god", "حواري": "disciples",
 }
 SAID_AFTER_ASHAB = {"جنه": "paradise", "نار": "fire", "اعراف": "araf"}
+SAID_NOT = {"مَلِك"}  # ﴿وقال الملِك﴾ (ملك مصر) لا ﴿الملَك﴾
 # أفعال لا يقولها بضمير «نا» إلا الله: ﴿أنزلنا﴾، ﴿أرسلنا﴾، ﴿خلقنا﴾…
 DIVINE_VERBS = {"انزل", "نزل", "ارسل", "خلق", "جعل", "اوحي", "اهلك", "اغرق", "نجي", "انجي", "اتي", "قص",
                 "صرف", "ذرا", "سخر", "زين", "فتح", "اعطي", "يسر", "اعتد", "دمر", "وهب", "اصطفي", "اورث",
@@ -766,6 +767,8 @@ def vocative(words, i, markers):
         return "son"
     if w["lem"] == "اهل" and nxt is not None:
         return {"كتاب": "ahl_kitab", "يثرب": "yathrib"}.get(nxt["lem"])
+    if w["lem"] == "ذو":  # ﴿يا ذا القرنين﴾ غير ﴿يا أولي الألباب﴾ (اللمّة واحدة)
+        return "dhulqarnayn" if nxt is not None and nxt["lem"] == "قرن" else "ulul"
     if w["lem"] in VOC_LEMMA:
         return VOC_LEMMA[w["lem"]]
     return _char_at(words, i, markers)
@@ -785,8 +788,10 @@ def is_prayer(words, i):
 
 def speech_subject(words, i, markers):
     """فاعل فعل القول في الكلمة i إذا ذُكر بعده: معرّف جماعة أو شخصية، أو None."""
+    # يُتخطى المقول له (﴿قال لقومه﴾، ﴿قالت لهم رسلهم﴾) لا الفعل (﴿ليمسن الذين كفروا﴾ مقولٌ لا فاعل)
     j = i + 1
-    while j < len(words) and j <= i + 3 and (words[j]["lem"] in PREPOSITIONS or "ل" in words[j]["pre"]):
+    while j < len(words) and j <= i + 3 and words[j]["pos"] != "V" and (
+            words[j]["lem"] in PREPOSITIONS or "ل" in words[j]["pre"]):
         j += 1
     if j >= len(words):
         return None
@@ -796,15 +801,18 @@ def speech_subject(words, i, markers):
     char = _char_at(words, j, markers)
     if char:
         return "prophet" if char == "muhammad" else char
-    if x["lem"] == "الذي" and j + 1 < len(words):
-        if words[j + 1]["lem"] == "اوتي" and j + 2 < len(words):
-            return {"علم": "knowledge", "كتاب": "ahl_kitab"}.get(words[j + 2]["lem"])
+    if x["nt"] == "الذين" and j + 1 < len(words):  # الجمع وحده: ﴿وقال الذي آمن﴾ رجل بعينه
+        after = words[j + 2]["lem"] if j + 2 < len(words) else ""
+        if words[j + 1]["lem"] == "اوتي":
+            return {"علم": "knowledge", "كتاب": "ahl_kitab"}.get(after)
+        if words[j + 1]["lem"] == "في":  # ﴿الذين في قلوبهم مرض﴾ غير ﴿الذين في النار﴾
+            return {"قلب": "hypocrites", "نار": "fire"}.get(after)
         return SAID_ALLADHINA.get(words[j + 1]["lem"])
     if x["lem"] == "اصحاب" and j + 1 < len(words):
         return SAID_AFTER_ASHAB.get(words[j + 1]["lem"])
     if x["lem"] == "رب" and "NOM" in x["tags"] and not ({"1S", "1P"} & set(x["suf"])):
         return "god"  # ﴿قال ربك﴾، ﴿قال ربكم﴾
-    if x["lem"] in SAID_LEMMA and "NOM" in x["tags"]:
+    if x["lem"] in SAID_LEMMA and "NOM" in x["tags"] and x["raw"] not in SAID_NOT:
         return SAID_LEMMA[x["lem"]]
     return None
 

@@ -91,6 +91,9 @@ class OrderTest(unittest.TestCase):
         self.assertIn((20, 11), self.voice("addressees", "musa"))
         self.assertIn((12, 4), self.voice("addressees", "father"))  # ﴿يا أبت﴾
         self.assertIn((31, 13), self.voice("addressees", "son"))  # ﴿يا بني لا تشرك بالله﴾
+        self.assertIn((2, 197), self.voice("addressees", "ulul"))  # ﴿واتقون يا أولي الألباب﴾
+        self.assertIn((18, 86), self.voice("addressees", "dhulqarnayn"))  # ﴿قلنا يا ذا القرنين﴾
+        self.assertNotIn((2, 197), self.voice("addressees", "dhulqarnayn"))
         self.assertIn((2, 201), self.voice("addressees", "god"))  # ﴿ربنا آتنا في الدنيا حسنة﴾
         self.assertNotIn((35, 34), self.voice("addressees", "god"))  # ﴿إن ربنا لغفور شكور﴾ خبر لا دعاء
         self.assertIn((2, 189), self.voice("addressees", "prophet"))  # ﴿يسألونك عن الأهلة﴾
@@ -105,6 +108,11 @@ class OrderTest(unittest.TestCase):
         self.assertIn((10, 2), self.voice("speakers", "disbelievers"))  # ﴿قال الكافرون﴾
         self.assertNotIn((12, 85), self.voice("speakers", "god"))  # ﴿قالوا تالله﴾ قسم لا فاعل
         self.assertNotIn((15, 6), self.voice("speakers", "prophet"))  # ﴿وقالوا يا أيها الذي نزل عليه الذكر﴾
+        self.assertNotIn((12, 43), self.voice("speakers", "angels"))  # ﴿وقال الملِك﴾ ملك مصر
+        self.assertIn((40, 49), self.voice("speakers", "fire"))  # ﴿وقال الذين في النار﴾
+        self.assertNotIn((40, 49), self.voice("speakers", "hypocrites"))
+        # ﴿عما يقولون ليمسن الذين كفروا﴾: ﴿الذين كفروا﴾ مقول لا قائل
+        self.assertNotIn((5, 73), self.voice("speakers", "disbelievers"))
 
     def test_every_character_in_one_story_at_most(self):
         members = [m for _, _, ms in order.STORIES for m in ms]
