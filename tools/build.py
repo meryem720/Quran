@@ -143,6 +143,14 @@ def _start_kind(segments):
     return None
 
 
+def _cause(first, second):
+    """﴿ذلك بأن…﴾، ﴿ذلكم بما…﴾: أول الآية اسم الإشارة ﴿ذلك﴾ وفي أول الثانية باء الجر سابقةً
+    (لا ﴿ذلك مبلغهم﴾ ولا ﴿ذلك بعيد﴾، فالباء فيهما من أصل الكلمة)."""
+    return (bool(first) and "DEM" in first[0][1] and "LEM:ذا" in first[0][1]
+            and any("DIST" in tags for _, tags in first)
+            and bool(second) and "PREF" in second[0][1] and "LEM:ب" in second[0][1])
+
+
 def _purpose(segments):
     """لام التعليل في أول الآية ثم فعل: ﴿ليجزي الذين آمنوا﴾ غاية ما قبلها."""
     prefixes = [tags for _, tags in segments if "PREF" in tags]
@@ -169,6 +177,7 @@ def parse_morphology(path, detail=False):
     verses = {}
     questions = set()  # الآيات التي فيها أداة استفهام
     first_word = defaultdict(list)  # (سورة، آية) -> أجزاء الكلمة الأولى [(نوعها، وسومها)]
+    second_word = defaultdict(list)
     third_person = set()  # آيات فيها ضمير غائب متصل
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -181,6 +190,8 @@ def parse_morphology(path, detail=False):
                 questions.add((s, a))
             if w == 1:
                 first_word[(s, a)].append((pos_tag, tags.split("|")))
+            elif w == 2:
+                second_word[(s, a)].append((pos_tag, tags.split("|")))
             parts_ = tags.split("|")
             if pos_tag == "N" and "PRON" in parts_ and "SUFF" in parts_ and any(t.startswith("3") for t in parts_):
                 third_person.add((s, a))
@@ -199,14 +210,16 @@ def parse_morphology(path, detail=False):
                 word["name"] = True  # اسم علم: موسى، فرعون، مكة…
             root = next((t[5:] for t in parts if t.startswith("ROOT:")), None)
             lemma = next((t[4:] for t in parts if t.startswith("LEM:")), None)
-            person = next((t for t in parts if _PERSON.fullmatch(t)), "")
-            if "PREF" in parts:
-                word["pre"].append(normalize(lemma or ""))
-                word["voc"] = word["voc"] or "VOC" in parts
-            elif "SUFF" in parts:
-                word["suf"].append(person)
-            elif word["pos"] is None:
-                word.update(pos=pos_tag, tags=set(parts), stem_lemma=lemma or "", stem_root=root or "", person=person)
+            if detail:
+                person = next((t for t in parts if _PERSON.fullmatch(t)), "")
+                if "PREF" in parts:
+                    word["pre"].append(normalize(lemma or ""))
+                    word["voc"] = word["voc"] or "VOC" in parts
+                elif "SUFF" in parts:
+                    word["suf"].append(person)
+                elif word["pos"] is None:
+                    word.update(pos=pos_tag, tags=set(parts), stem_lemma=lemma or "", stem_root=root or "",
+                                person=person)
             if root:
                 # الجزء الذي يحمل الجذر هو أصل الكلمة
                 word["root"], word["lemma"] = root, lemma
@@ -222,6 +235,7 @@ def parse_morphology(path, detail=False):
             "question": (s, a) in questions,
             "start": _start_kind(first_word[(s, a)]),
             "purpose": _purpose(first_word[(s, a)]),
+            "cause": _cause(first_word[(s, a)], second_word[(s, a)]),
             # قصّ متتابع: فاء ثم فعل ماضٍ لغائب، وفي الآية ضمير غائب (﴿قالت نملة… ۝ فتبسم ضاحكا من قولها﴾)
             "narrative": (s, a) in third_person and _fa_past_third(first_word[(s, a)]),
             "words": [
@@ -580,11 +594,7 @@ CONTEXT_CONTINUATION = {"illa": 6, "gen": 7, "yawm": 8, "ulaika": 9, "idha": 10,
 # التعليل (﴿ذلك بأنهم…﴾) والغاية (لام التعليل: ﴿ليجزي الذين آمنوا﴾) في أول الآية يبيّنان ما قبلها، لكن
 # إدخالهما في ترتيب الروابط أخّر أمثلة صحيحة (الإضافية 0.33 ← 0.32)، فيُعرضان في صفحة الآية وحدهما
 # (quran.json: "explains") ولا يدخلان في الحساب
-def _is_cause(words):
-    """﴿ذلك بأن…﴾، ﴿ذلكم بما…﴾: أول الآية ﴿ذلك﴾ أو ﴿ذلكم﴾ وكلمتها الثانية تبدأ بالباء
-    (لا ﴿ذلك مبلغهم﴾، فالحروف لا تُدمج)."""
-    return (len(words) > 1 and normalize(words[0]["text"]) in ("ذلك", "ذلكم")
-            and normalize(words[1]["text"]).startswith("ب"))
+
 # ﴿خير/شر من ذلك(م)﴾ مفاضلة تشير إلى ما في الآية السابقة (آل عمران 15، المائدة 60، الحج 72)
 CONTEXT_COMPARISON = 14
 _COMPARISON = re.compile("(خير|شر)منذلك")
@@ -1040,7 +1050,7 @@ def build_quran(verses, clauses=None):
     explains = {}
     for k, v in enumerate(verses):
         if k and verses[k - 1]["s"] == v["s"]:
-            if _is_cause(v["words"]):
+            if v.get("cause"):
                 explains[f"{v['s']}:{v['a']}"] = "cause"
             elif v.get("purpose"):
                 explains[f"{v['s']}:{v['a']}"] = "purpose"

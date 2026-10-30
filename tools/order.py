@@ -379,7 +379,7 @@ def narrative_kind(words):
         return "narr"
     if w["lem"] == "ثم" and nxt and nxt["pos"] == "V" and "PERF" in nxt["tags"]:
         return "narr"
-    if w["pos"] == "V" and "PERF" in tags and ("ف" in w["pre"] or ("و" in w["pre"] and w["person"][:1] in "31")):
+    if w["pos"] == "V" and "PERF" in tags and ("ف" in w["pre"] or ("و" in w["pre"] and w["person"][:1] in ("3", "1"))):
         return "narr"
     return "speech" if _addresses(words) else None
 
@@ -885,8 +885,8 @@ def build_order(verses):
             era["stages"] = [[k, HOUR_STAGES[k]] for k in (1, 2, 3, 4, 0)]
         eras.append(era)
     unplaced = [{"id": era[2:], "title": CHAR_BY_ID[era[2:]][1], "passages": by_era[era]}
-                for era in sorted(by_era, key=lambda e: min((p[0], p[1]) for p in by_era[e]))
-                if era.startswith("u:")]
+                for era in sorted((e for e in by_era if e.startswith("u:") and by_era[e]),
+                                  key=lambda e: min((p[0], p[1]) for p in by_era[e]))]
     characters = []
     for ident, name, group, era, _ in CHARACTERS:
         refs = sorted(key for key, chars in mentions.items() if ident in chars)

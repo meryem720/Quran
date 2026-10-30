@@ -43,9 +43,19 @@ class CleanTest(unittest.TestCase):
         self.assertEqual(dictionary.clean("مكسور ممدود الدواء وهو الأطبة جمع الآسي مثل"), "الدواء وهو الأطبة")
         self.assertEqual(dictionary.clean("الإعلام وأذان الصلاة معروف وقد أذن أذانا"), "الإعلام")
         self.assertEqual(dictionary.clean("شجر وهو نوع من الطرفاء الواحدة أثلة"), "شجر وهو نوع من الطرفاء")
+        # ضبط أو تصريف قبل المعنى
+        self.assertEqual(dictionary.clean("وضم الثاء العقوبة"), "العقوبة")
+        self.assertEqual(dictionary.clean("مصدر الأخرق وهو ضد الرفيق"), "ضد الرفيق")
+        # المعنى القصير يبقى («الكافور: من الطيب»، «الدُّولة: في المال»)، والاسم الذي أوله واو
+        self.assertEqual(dictionary.clean("من الطيب"), "من الطيب")
+        self.assertEqual(dictionary.clean("وعاء"), "وعاء")
+        # «جمع» فعلًا لا جمعًا: «الذي جمع من هاهنا»
+        self.assertTrue(dictionary.clean("الذي جمع من هاهنا وها هنا").startswith("الذي جمع"))
         # ما ليس معنى يُترك كله
-        self.assertEqual(dictionary.clean("في الولادة"), "")
         self.assertEqual(dictionary.clean("لا واحد لها من لفظها وهي مؤنثة لأن"), "")
+        self.assertEqual(dictionary.clean("والكذب"), "")
+        self.assertEqual(dictionary.clean("جمعه ستور"), "")
+        self.assertEqual(dictionary.clean("مصدر وسق الشيء أي جمعه وحمله"), "جمعه وحمله")
 
 
 class GlossesTest(unittest.TestCase):
