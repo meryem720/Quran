@@ -35,7 +35,8 @@ async function load(hash) {
   vm.runInContext(fs.readFileSync(path.join(WEB, "app.js"), "utf8"), ctx);
   for (let i = 0; i < 100 && !el("app").innerHTML.includes("<"); i++) await new Promise((r) => setTimeout(r, 50));
   await new Promise((r) => setTimeout(r, 50));
-  return { html: el("app").innerHTML + (els["topic-verses"] ? els["topic-verses"].innerHTML : ""), errors };
+  const extra = ["topic-verses", "order-list"].map((id) => (els[id] ? els[id].innerHTML : "")).join("");
+  return { html: el("app").innerHTML + extra, errors };
 }
 
 const topic = (q) => "#topic/" + encodeURIComponent(q);
@@ -60,6 +61,20 @@ for (const [name, hash, expect] of [
   ["لفظ لا يرد في القرآن", topic("تلفاز"), "لا يرد في القرآن"],
   ["العرض المبسّط أو الكامل", "#2:255", "data-view=\"simple\""],
   ["بحث حرفي", "#search/" + encodeURIComponent("الرحمن"), "نتائج البحث"],
+  ["الترتيب", "#order", "ترتيب القرآن"],
+  ["زمن الأحداث", "#order/time", "الشاهد على موضعها"],
+  ["حقبة موسى", "#order/time/musa", "passage-text"],
+  ["مشاهد الآخرة بمراحلها", "#order/time/hour", "النفخ في الصور وأهوال الساعة"],
+  ["قصص لا يحدد النص زمنها", "#order/time/unplaced", "أصحاب الكهف"],
+  ["القصص", "#order/stories", "قصة"],
+  ["قصة يوسف", "#order/story/yusuf", "يوسف 4–"],
+  ["الشخصيات", "#order/characters", "أقوام وجماعات"],
+  ["شخصية موسى", "#order/character/musa", "ما قاله"],
+  ["الترتيب بالموضوع", "#order/topics", "اليوم الآخر"],
+  ["المخاطَبون", "#order/addressees", "الذين آمنوا"],
+  ["المخاطَب: الذين آمنوا", "#order/addressee/believers", "نداء"],
+  ["المتكلم: الله", "#order/speaker/god|1", "بضمير المتكلم"],
+  ["الآية في الترتيب", "#20:12", "الزمن:"],
 ]) {
   test(name, async () => {
     const { html, errors } = await load(hash);
