@@ -13,12 +13,26 @@ const CONTEXT_REASONS = {
   9: "كلام متصل: ﴿أولئك﴾ في أول الثانية إشارة إلى من وُصفوا في الأولى",
   10: "كلام متصل: ﴿إذا﴾ في أول الثانية تصف حال ما في الأولى",
   12: "كلام متصل: ﴿بلى﴾ في أول الثانية جواب ما نُفي في الأولى",
+  13: "كلام متصل: ﴿فمن﴾ في أول الثانية تفريع على ما في الأولى",
+  14: "مفاضلة: ﴿خير/شر من ذلك﴾ في الثانية تشير إلى ما في الأولى",
+  15: "تتمة جواب ﴿يسألونك﴾: الثانية تكمل الجواب في الأولى",
+  16: "قصّ متتابع: الثانية تبدأ بفاء وفعل ماضٍ يكمل ما في الأولى",
 };
 // [11، سورة المقطع المقابل، أول آية، آخر آية]: القصة نفسها في موضع آخر
 const PARALLEL = 11;
 const MAX_RESULTS = 200;
 // جذر يرد في أكثر من هذا العدد من الآيات لا يُبرَز في آيات البيان (الله، قال، كان…)
 const COMMON_ROOT = 400;
+const SIMPLE_COUNT = 3;
+
+// تفضيلات القارئ في متصفحه فقط (قد يمنعها المتصفح، فلا يتوقف شيء عليها)
+function stored(key, fallback) {
+  try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; }
+}
+function store(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* تصفح خاص أو تخزين ممنوع */ }
+}
+const viewMode = () => stored("quran-view", "full");
 const TOPIC_PAGE = 40;
 const SUGGESTED_TOPICS = [
   "الصلاة", "الزكاة", "الصيام", "الحج", "الصبر", "التوبة", "الشكر", "الرحمة", "التقوى",
@@ -38,6 +52,7 @@ const state = {
   verseIndex: new Map(), // "s:a" -> رقم الآية في فهرس الموضوعات
   glosses: {},    // لمّة موحّدة -> {h: اللفظ في المعجم، d: [معانيه]} (مختار الصحاح)
   waqf: {},       // "s:a" -> [عدد كلمات الجمل قبل كل حدّ وقف] للآيات ذات أكثر من جملة
+  rootSenses: {}, // جذر -> [جمل مادته في المعجم] للجذور الشائعة متعددة المعنى (مختار الصحاح)
   lemmaText: new Map(), // لمّة موحّدة -> كتابتها بلا تشكيل، للألفاظ ذات الجذر
   lastScrollY: 0,
   navigatedByLink: false, // التنقل الحالي بنقر رابط (لا برجوع المتصفح)
@@ -93,7 +108,13 @@ function passageLink([, s, a1, a2]) {
 
 // سبب الرابط بين آيتين: عنصر من related.json
 // [سورة، آية، الدرجة، السياق، العبارة المشتركة، الجذور المشتركة، التعبير المشترك، [اللفظ النادر، عدد آياته]]
-function reasonChips([, , , ctx, phrase, roots, expression, rare]) {
+function reasonChips(item, { first = false } = {}) {
+  const chips = reasonList(item);
+  return (first ? chips.slice(0, 1) : chips).join("");
+}
+
+// الأسباب من الأخصّ إلى الأعمّ: السياق، ثم العبارة، ثم التعبير، ثم اللفظ النادر، ثم الجذور
+function reasonList([, , , ctx, phrase, roots, expression, rare]) {
   const chips = [];
   if (Array.isArray(ctx) && ctx[0] === PARALLEL) {
     chips.push(`<span class="chip context">القصة نفسها في ${passageLink(ctx)}</span>`);
@@ -118,7 +139,7 @@ function reasonChips([, , , ctx, phrase, roots, expression, rare]) {
     if (rootTerms.length) chips.push(`<span class="chip roots">جذور مشتركة: ${escapeHtml(rootTerms.join("، "))}</span>`);
     if (names.length) chips.push(`<span class="chip roots">أعلام مشتركة: ${escapeHtml(names.join("، "))}</span>`);
   }
-  return chips.join("");
+  return chips;
 }
 
 // ---------- الصفحات ----------
@@ -146,7 +167,7 @@ function renderVerse(s, a) {
   // الجذور التي تُبرَز في آية البيان: المشتركة مع الجملة (أو الآية)، دون الشائعة جدًا (الله، قال…)
   const rootsOf = (from, to) => new Set(words.slice(from, to).map((w) => w[1])
     .filter((r) => r && (state.rootIndex.get(r) || []).length <= COMMON_ROOT));
-  const card = (item, roots) => {
+  const card = (item, roots, oneReason = false) => {
     const [rs, ra, score] = item;
     const width = Math.max(8, Math.round((score / top) * 100));
     return `
@@ -156,12 +177,16 @@ function renderVerse(s, a) {
           <span class="bar" title="درجة الارتباط: ${score}"><span style="width:${width}%"></span></span>
         </div>
         ${verseHtml(rs, ra, { highlightRoots: roots })}
-        <div class="chips">${reasonChips(item)}</div>
+        <div class="chips">${reasonChips(item, { first: oneReason })}</div>
       </article>`;
   };
   // بيان الآية جملةً جملة: كل رابط تحت الجملة التي يبيّنها (item[8])
   let relatedHtml;
-  if (ends && items.some((item) => item[8] !== undefined)) {
+  const simple = viewMode() === "simple";
+  if (simple) {
+    // مبسّط: أقوى ثلاثة روابط، لكل منها سبب واحد
+    relatedHtml = items.slice(0, SIMPLE_COUNT).map((item) => card(item, rootsOf(0, words.length), true)).join("");
+  } else if (ends && items.some((item) => item[8] !== undefined)) {
     const groups = cuts.slice(0, -1).map((from, c) => {
       const group = items.filter((item) => item[8] === c);
       if (!group.length) return "";
@@ -195,7 +220,10 @@ function renderVerse(s, a) {
       ${passagesHtml}
     </section>
     <div class="pager">${prevLink}${nextLink}</div>
-    <h2>الآيات المفسِّرة <small>${ends ? "جملةً جملة بحسب علامات الوقف في المصحف، والألفاظ المشتركة مُبرَزة · " : ""}النقر على أي كلمة يعرض مواضع جذرها في القرآن</small></h2>
+    <h2>الآيات المفسِّرة <small>${simple ? `أقوى ${SIMPLE_COUNT} روابط بسبب واحد لكل منها · `
+      : ends ? "جملةً جملة بحسب علامات الوقف في المصحف، والألفاظ المشتركة مُبرَزة · " : ""}النقر على أي كلمة يعرض مواضع جذرها في القرآن</small></h2>
+    <p class="view-toggle">العرض: <button data-view="simple" class="${simple ? "on" : ""}">مبسّط</button>
+      <button data-view="full" class="${simple ? "" : "on"}">كامل</button></p>
     ${relatedHtml || `<p class="empty">لم يُعثر على آيات مرتبطة.</p>`}
   `;
   document.title = `${refLabel(s, a)} · تفسير القرآن بالقرآن`;
@@ -214,30 +242,134 @@ function renderList(title, matches, opts, before = "") {
   `;
 }
 
-// معنى اللفظ في المعجم: الاسم المعرَّف في التعريف («الجبل»، «الحيات») يفتح مواضعه في القرآن
-function glossHtml({ h, d }) {
-  const linkWords = (definition) => definition.split(" ").map((tok) => {
+// الاسم المعرَّف في تعريف المعجم («الجبل»، «الحيات») إذا ورد في القرآن يفتح مواضعه فيه
+function linkWords(definition) {
+  return definition.split(" ").map((tok) => {
     const k = normalize(tok);
     const bare = k.startsWith("ال") && k.length > 3 ? k.slice(2) : null;
     const key = bare && [bare, bare.endsWith("ات") ? bare.slice(0, -2) + "ه" : null].find((x) => state.lemmaText.has(x));
     return key ? `<a href="#search/${encodeURIComponent(state.lemmaText.get(key))}">${escapeHtml(tok)}</a>` : escapeHtml(tok);
   }).join(" ");
+}
+
+const DICT_NOTE = `من «مختار الصحاح» للرازي: معنى اللفظ في اللغة كما في المعجم، لا تفسير للآية،
+  وقد يذكر المعجم للفظ الواحد معاني عدة. الكلمة المسطّرة ترد في القرآن: انقر عليها لترى مواضعها.`;
+
+function glossHtml({ h, d }) {
   return `
     <section class="card gloss">
       <h2>﴿${escapeHtml(h)}﴾ في المعجم</h2>
       <ul class="senses">${d.map((x) => `<li>${linkWords(x)}</li>`).join("")}</ul>
-      <p class="hint">من «مختار الصحاح» للرازي: معنى اللفظ في اللغة كما في المعجم، لا تفسير للآية،
-        وقد يذكر المعجم للفظ الواحد معاني عدة. الكلمة المسطّرة ترد في القرآن: انقر عليها لترى مواضعها.</p>
+      <p class="hint">${DICT_NOTE}</p>
     </section>`;
 }
 
-// #root/<جذر>[|<لمّة>]: مواضع الجذر، ومعنى اللفظ في المعجم إن كان من غريب القرآن
+// جذر شائع يحمل أصله أكثر من معنى: مادته في المعجم كاملة («الكَلْم» في اللغة الجرح)
+function rootSensesHtml(root) {
+  const senses = state.rootSenses[root];
+  if (!senses) return "";
+  return `
+    <section class="card gloss">
+      <h2>معاني الجذر «${escapeHtml(root)}» في المعجم</h2>
+      <ul class="senses">${senses.map((x) => `<li>${linkWords(x)}</li>`).join("")}</ul>
+      <p class="hint">${DICT_NOTE}</p>
+    </section>`;
+}
+
+// الحرف الذي يلي الكلمة: حرف جر أو «أن» منفصلان، أو باء/لام/كاف متصلة (﴿بالله﴾، ﴿لكم﴾)
+const PARTICLES = new Set(["في", "علي", "عن", "من", "الي", "مع", "حتي", "ان"]);
+function followingParticle(next) {
+  if (!next) return "";
+  let [text, , lemma] = next;
+  let t = normalize(text), l = normalize(lemma || "");
+  if (/^[وف]/.test(t) && !l.startsWith(t[0])) t = t.slice(1);  // واو أو فاء عطف
+  if (PARTICLES.has(l)) return T.plain(lemma);
+  const head = t[0];
+  if ("بلك".includes(head) && !l.startsWith(head)) return head + "ـ";
+  return "";
+}
+
+// مواضع الجذر مجموعة حسب اللفظ والحرف الذي يليه: «ضرب في الأرض» غير «ضرب مثلا»،
+// و«يستحيي أن» غير «يستحيون نساءهم»
+function rootGroups(root) {
+  const groups = new Map();
+  for (const [s, a] of state.rootIndex.get(root) || []) {
+    const words = getVerse(s, a);
+    words.forEach((w, k) => {
+      if (w[1] !== root) return;
+      const particle = followingParticle(words[k + 1]);
+      const key = `${T.plain(w[2])} + ${particle || "بلا حرف"}`;
+      if (!groups.has(key)) groups.set(key, []);
+      const list = groups.get(key);
+      if (!list.some(([x, y]) => x === s && y === a)) list.push([s, a]);
+    });
+  }
+  return [...groups.entries()].sort((x, y) => y[1].length - x[1].length);
+}
+
+// مختبر الفرضيات: معنى يقترحه القارئ، وحكمه على كل موضع، محفوظ في متصفحه وحده
+const LAB_MARKS = [["yes", "يصمد"], ["no", "لا يصمد"], ["open", "غير محسوم"]];
+const labKey = (root) => `quran-lab:${root}`;
+function labCounts(lab) {
+  const counts = { yes: 0, no: 0, open: 0 };
+  Object.values(lab.marks).forEach((m) => { counts[m] += 1; });
+  return LAB_MARKS.map(([k, label]) => `${label} ${counts[k]}`).join("، ");
+}
+function labHtml(root) {
+  const lab = stored(labKey(root), { hyp: "", marks: {} });
+  return `
+    <section class="card lab-box">
+      <h2>مختبر الفرضيات</h2>
+      <label>معنى مقترح للجذر «${escapeHtml(root)}»:
+        <input type="text" data-lab-hyp="${escapeHtml(root)}" value="${escapeHtml(lab.hyp)}" placeholder="اكتب قراءتك هنا"></label>
+      <p class="hint">احكم في كل موضع أدناه: هل يصمد هذا المعنى فيه؟ يُحفظ حكمك في متصفحك وحده، والتطبيق لا يحكم بين القراءات.</p>
+      <p class="lab-counts" data-lab-counts="${escapeHtml(root)}">${labCounts(lab)}</p>
+    </section>`;
+}
+function labButtons(root, s, a) {
+  const mark = stored(labKey(root), { hyp: "", marks: {} }).marks[`${s}:${a}`];
+  return `<div class="lab-row">${LAB_MARKS.map(([k, label]) =>
+    `<button data-lab="${k}" data-lab-ref="${s}:${a}" data-lab-root="${escapeHtml(root)}" class="${mark === k ? "on" : ""}">${label}</button>`).join("")}</div>`;
+}
+
+// #root/<جذر>[|<لمّة>]: معنى اللفظ والجذر في المعجم، ومختبر الفرضيات، والمواضع حسب اللفظ وما يليه
 function renderRoot(arg) {
   const [root, lemma] = arg.split("|");
   const gloss = lemma && state.glosses[lemma];
-  renderList(`مواضع الجذر «${escapeHtml(root)}»`, state.rootIndex.get(root) || [], { highlightRoot: root },
-    gloss ? glossHtml(gloss) : "");
+  const matches = state.rootIndex.get(root) || [];
+  const groups = rootGroups(root);
+  // حصة كل مجموعة من البطاقات، فلا تحجب المجموعات الكبيرة الصغيرة («يستحيي أن» بين مواضع «حيي» كلها)
+  const perGroup = Math.max(3, Math.floor(MAX_RESULTS / Math.max(1, groups.length)));
+  const sections = groups.map(([label, refs], g) => {
+    const cards = refs.slice(0, perGroup);
+    const more = refs.length > cards.length ? ` · تُعرض ${cards.length}` : "";
+    return `
+      <section class="clause-group" id="grp-${g}" tabindex="-1">
+        <h3>${escapeHtml(label)} <small>(${refs.length}${more})</small></h3>
+        ${cards.map(([s, a]) => `
+          <article class="card related" data-href="#${s}:${a}" tabindex="0">
+            <a class="ref" href="#${s}:${a}">${refLabel(s, a)}</a>
+            ${verseHtml(s, a, { highlightRoot: root })}
+            ${labButtons(root, s, a)}
+          </article>`).join("")}
+      </section>`;
+  }).join("");
+  const index = groups.length > 1 ? `<p class="hint">حسب اللفظ والحرف الذي يليه: ${groups.map(([label, refs], g) =>
+    `<a href="#grp-${g}" data-scroll="grp-${g}">${escapeHtml(label)} (${refs.length})</a>`).join(" · ")}</p>` : "";
+  app.innerHTML = `${gloss ? glossHtml(gloss) : ""}${rootSensesHtml(root)}${labHtml(root)}
+    <h2>مواضع الجذر «${escapeHtml(root)}» <small>${matches.length} آية</small></h2>
+    ${index}
+    ${sections || `<p class="empty">لا توجد نتائج.</p>`}`;
   document.title = `الجذر ${root} · تفسير القرآن بالقرآن`;
+}
+
+// هل يرد اللفظ في القرآن بأي صورة (بحروفه، أو بلمّته، أو بالإملاء الحديث)؟
+function occursInQuran(word) {
+  const q = normalize(word);
+  const bare = q.startsWith("ال") && q.length > 3 ? q.slice(2) : q;
+  const qs = T.searchKey(word);
+  return state.normWords.some(([, , words, lemmas, spelled]) => words.some((w) => w.includes(q) || w.includes(bare))
+    || lemmas.includes(q) || lemmas.includes(bare) || spelled.some((w) => qs.length >= 2 && w.includes(qs)));
 }
 
 function renderSearch(query) {
@@ -374,9 +506,13 @@ function renderTopic(arg) {
     }).join("");
     const missing = resolved.missing.length
       ? `<p>لم تُفهم من العبارة: ${resolved.missing.map((w) => `«${escapeHtml(w)}»`).join("، ")}.</p>` : "";
+    const absent = query.split(/\s+/).filter(Boolean).filter((w) => !occursInQuran(w));
+    const absentHtml = absent.length
+      ? `<p class="absent"><strong>${absent.map((w) => `«${escapeHtml(w)}»`).join("، ")} ${absent.length > 1 ? "لا ترد" : "لا يرد"} في القرآن.</strong></p>` : "";
     app.innerHTML = `
       <section class="card">
         <h2>لم يُعثر على موضوع «${escapeHtml(query)}»</h2>
+        ${absentHtml}
         ${missing}
         ${sugg ? `<p>كلمات قريبة:</p><div class="topics-grid">${sugg}</div>` : ""}
         <p>${wordSearch} · <a href="#topics">الموضوعات المقترحة</a></p>
@@ -585,6 +721,20 @@ function setupControls() {
   // النقر على كلمة يفتح مواضع جذرها، والنقر على بطاقة يفتح الآية
   const activate = (e) => {
     if (e.target.closest("[data-more]")) { if (state.topicMore) state.topicMore(true); return; }
+    const view = e.target.closest("[data-view]");
+    if (view) { store("quran-view", view.dataset.view); route(); return; }
+    const labBtn = e.target.closest("[data-lab]");
+    if (labBtn) {
+      const { lab: mark, labRef: ref, labRoot: root } = labBtn.dataset;
+      const lab = stored(labKey(root), { hyp: "", marks: {} });
+      if (lab.marks[ref] === mark) delete lab.marks[ref]; else lab.marks[ref] = mark;
+      store(labKey(root), lab);
+      document.querySelectorAll(`[data-lab-ref="${ref}"]`).forEach((b) => b.classList.toggle("on", lab.marks[ref] === b.dataset.lab));
+      const counts = document.querySelector("[data-lab-counts]");
+      if (counts) counts.textContent = labCounts(lab);
+      return;
+    }
+    if (e.target.closest("input")) return;
     const scroll = e.target.closest("[data-scroll]");
     if (scroll) {
       e.preventDefault();
@@ -602,6 +752,14 @@ function setupControls() {
     if (card) location.hash = card.dataset.href;
   };
   app.addEventListener("click", activate);
+  app.addEventListener("input", (e) => {
+    const input = e.target.closest && e.target.closest("[data-lab-hyp]");
+    if (!input) return;
+    const root = input.dataset.labHyp;
+    const lab = stored(labKey(root), { hyp: "", marks: {} });
+    lab.hyp = input.value;
+    store(labKey(root), lab);
+  });
   app.addEventListener("keydown", (e) => { if (e.key === "Enter") activate(e); });
 
   // نحفظ موضع القراءة في صفحة الموضوع قبل مغادرتها
@@ -637,15 +795,17 @@ function buildIndexes() {
 
 async function init() {
   try {
-    const [quran, related, glosses] = await Promise.all([
+    const [quran, related, glosses, rootSenses] = await Promise.all([
       fetch("data/quran.json").then((r) => r.json()),
       fetch("data/related.json").then((r) => r.json()),
       // معاني الألفاظ (tools/dictionary.py) اختيارية: يعمل التطبيق بدونها
       fetch("data/glosses.json").then((r) => r.json()).catch(() => ({})),
+      fetch("data/root_senses.json").then((r) => r.json()).catch(() => ({})),
     ]);
     state.surahs = quran.surahs;
     state.related = related;
     state.glosses = glosses;
+    state.rootSenses = rootSenses;
     state.waqf = quran.waqf || {};
     state.topicIndex = T.buildIndex(quran);
     state.topicIndex.verses.forEach((v, i) => state.verseIndex.set(`${v.s}:${v.a}`, i));

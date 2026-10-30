@@ -54,6 +54,11 @@ for (const [name, hash, expect] of [
   ["موضوع غير موجود", topic("xyz"), "لم يُعثر"],
   ["جذر", "#root/" + encodeURIComponent("رحم"), "مواضع الجذر"],
   ["معنى اللفظ في المعجم", "#root/" + encodeURIComponent("طور|طور"), "مختار الصحاح"],
+  ["معاني الجذر في المعجم", "#root/" + encodeURIComponent("كلم"), "معاني الجذر «كلم» في المعجم"],
+  ["الجذر حسب ما يلي اللفظ", "#root/" + encodeURIComponent("ضرب"), "حسب اللفظ والحرف الذي يليه"],
+  ["مختبر الفرضيات", "#root/" + encodeURIComponent("حيي"), "مختبر الفرضيات"],
+  ["لفظ لا يرد في القرآن", topic("تلفاز"), "لا يرد في القرآن"],
+  ["العرض المبسّط أو الكامل", "#2:255", "data-view=\"simple\""],
   ["بحث حرفي", "#search/" + encodeURIComponent("الرحمن"), "نتائج البحث"],
 ]) {
   test(name, async () => {
