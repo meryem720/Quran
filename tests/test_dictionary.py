@@ -36,6 +36,36 @@ class SensesTest(unittest.TestCase):
         self.assertEqual(self.senses("مثن"), [])
 
 
+class CleanTest(unittest.TestCase):
+    def test_meaning_only(self):
+        # يُحذف التصريف والجمع والضبط، ويبقى المعنى
+        self.assertEqual(dictionary.clean("ضد الجد وقد هزل من باب ضرب"), "ضد الجد")
+        self.assertEqual(dictionary.clean("مكسور ممدود الدواء وهو الأطبة جمع الآسي مثل"), "الدواء وهو الأطبة")
+        self.assertEqual(dictionary.clean("الإعلام وأذان الصلاة معروف وقد أذن أذانا"), "الإعلام")
+        self.assertEqual(dictionary.clean("شجر وهو نوع من الطرفاء الواحدة أثلة"), "شجر وهو نوع من الطرفاء")
+        # ضبط أو تصريف قبل المعنى
+        self.assertEqual(dictionary.clean("وضم الثاء العقوبة"), "العقوبة")
+        self.assertEqual(dictionary.clean("وضم الثاء وهو العقوبة"), "العقوبة")
+        # «مصدر الأخرق وهو…» معنى لفظ آخر بضبط آخر، و«مصدر وهو شاذ… أي فصله» ليس معنى
+        self.assertEqual(dictionary.clean("مصدر الأخرق وهو ضد الرفيق"), "")
+        self.assertEqual(dictionary.clean("مصدر وهو شاذ لأن المصادر إنما تجيء على التفعال أي فصله"), "")
+        # المعنى الذي أوله «ضم/فتح/كسر» بلا واو يبقى
+        self.assertEqual(dictionary.clean("ضم الشيء إلى الشيء"), "ضم الشيء إلى الشيء")
+        # الجمع في وسط التعريف أو أوله يُقطع عنده
+        self.assertEqual(dictionary.clean("الأمعاء جمع حوية"), "الأمعاء")
+        self.assertEqual(dictionary.clean("جمعها في القلة أبور كأفلس"), "")
+        # المعنى القصير يبقى («الكافور: من الطيب»، «الدُّولة: في المال»)، والاسم الذي أوله واو
+        self.assertEqual(dictionary.clean("من الطيب"), "من الطيب")
+        self.assertEqual(dictionary.clean("وعاء"), "وعاء")
+        # «جمع» فعلًا لا جمعًا: «الذي جمع من هاهنا»
+        self.assertTrue(dictionary.clean("الذي جمع من هاهنا وها هنا").startswith("الذي جمع"))
+        # ما ليس معنى يُترك كله
+        self.assertEqual(dictionary.clean("لا واحد لها من لفظها وهي مؤنثة لأن"), "")
+        self.assertEqual(dictionary.clean("والكذب"), "")
+        self.assertEqual(dictionary.clean("جمعه ستور"), "")
+        self.assertEqual(dictionary.clean("مصدر وسق الشيء أي جمعه وحمله"), "جمعه وحمله")
+
+
 class GlossesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

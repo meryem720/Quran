@@ -17,7 +17,10 @@ const CONTEXT_REASONS = {
   14: "مفاضلة: ﴿خير/شر من ذلك﴾ في الثانية تشير إلى ما في الأولى",
   15: "تتمة جواب ﴿يسألونك﴾: الثانية تكمل الجواب في الأولى",
   16: "قصّ متتابع: الثانية تبدأ بفاء وفعل ماضٍ يكمل ما في الأولى",
+  17: "تُفتتح السورتان بالحروف المقطعة نفسها",
+  18: "رابط ضعيف: لا تشترك الآيتان إلا في لفظ شائع",
 };
+const WEAK = 18;
 // [11، سورة المقطع المقابل، أول آية، آخر آية]: القصة نفسها في موضع آخر
 const PARALLEL = 11;
 const MAX_RESULTS = 200;
@@ -34,11 +37,6 @@ function store(key, value) {
 }
 const viewMode = () => stored("quran-view", "full");
 const TOPIC_PAGE = 40;
-const SUGGESTED_TOPICS = [
-  "الصلاة", "الزكاة", "الصيام", "الحج", "الصبر", "التوبة", "الشكر", "الرحمة", "التقوى",
-  "الجنة", "النار", "القرآن", "اليتيم", "الربا", "الظلم",
-  "موسى", "إبراهيم", "عيسى", "مريم", "يوسف", "نوح", "فرعون", "إبليس",
-];
 const T = window.QuranTopic;
 
 const state = {
@@ -47,13 +45,23 @@ const state = {
   rootIndex: new Map(), // جذر -> [[s, a], ...]
   normWords: [],  // [[s, a, [كلمات موحّدة], [لمّات موحّدة]], ...]
   topicIndex: null, // فهرس الموضوعات (web/topic.js)
-  topicMore: null,  // دالة «عرض المزيد» في صفحة الموضوع
+  more: null,       // دالة «عرض المزيد» في الصفحة الحالية (الموضوع، الترتيب)
   topicViews: new Map(), // عنوان صفحة الموضوع -> {عدد المعروض، موضع القراءة}
   verseIndex: new Map(), // "s:a" -> رقم الآية في فهرس الموضوعات
   glosses: {},    // لمّة موحّدة -> {h: اللفظ في المعجم، d: [معانيه]} (مختار الصحاح)
   waqf: {},       // "s:a" -> [عدد كلمات الجمل قبل كل حدّ وقف] للآيات ذات أكثر من جملة
+  explains: {},   // "s:a" -> "cause" | "purpose": الآية تبيّن سبب ما قبلها أو غايته
+  initials: new Set(), // "s:a" للآيات التي تبدأ بالحروف المقطعة (﴿الم﴾، ﴿حم﴾)
+  pageList: null, // القائمة المعروضة على دفعات في الصفحة الحالية
   rootSenses: {}, // جذر -> [جمل مادته في المعجم] للجذور الشائعة متعددة المعنى (مختار الصحاح)
   lemmaText: new Map(), // لمّة موحّدة -> كتابتها بلا تشكيل، للألفاظ ذات الجذر
+  order: null,     // بيانات الترتيب (tools/order.py)
+  orderChars: new Map(),      // معرّف الشخصية -> بياناتها
+  orderEraOf: new Map(),      // "s:a" -> حقبة المقطع الذي فيه الآية
+  orderSpeakers: new Map(),   // "s:a" -> [معرّفات المتكلمين]
+  orderAddressees: new Map(), // "s:a" -> [معرّفات المخاطَبين]
+  orderNames: new Map(),      // معرّف -> اسم المتكلم أو المخاطَب
+  orderPassages: [],          // [{p: [سورة، أول، آخر، شخصيات…], era}] لكل مقاطع الحقب
   lastScrollY: 0,
   navigatedByLink: false, // التنقل الحالي بنقر رابط (لا برجوع المتصفح)
 };
@@ -102,9 +110,8 @@ function verseHtml(s, a, { clickable = false, highlightRoot = null, highlightRoo
   return `<span class="quran">${parts.join(" ")} <span class="ayah-num">﴿${a}﴾</span></span>`;
 }
 
-function passageLink([, s, a1, a2]) {
-  return `<a href="#${s}:${a1}">${state.surahs[s - 1].name} ${a1}–${a2}</a>`;
-}
+// [11، سورة، أول آية، آخر آية]: المقطع المقابل من القصة نفسها
+const passageLink = ([, s, a1, a2]) => rangeLink([s, a1, a2]);
 
 // سبب الرابط بين آيتين: عنصر من related.json
 // [سورة، آية، الدرجة، السياق، العبارة المشتركة، الجذور المشتركة، التعبير المشترك، [اللفظ النادر، عدد آياته]]
@@ -218,15 +225,77 @@ function renderVerse(s, a) {
       ${verseHtml(s, a, { clickable: true, clauseEnds: ends })}
       ${next}
       ${passagesHtml}
+      ${explainsHtml(s, a)}
+      ${verseOrderHtml(s, a)}
     </section>
     <div class="pager">${prevLink}${nextLink}</div>
     <h2>الآيات المفسِّرة <small>${simple ? `أقوى ${SIMPLE_COUNT} روابط بسبب واحد لكل منها · `
       : ends ? "جملةً جملة بحسب علامات الوقف في المصحف، والألفاظ المشتركة مُبرَزة · " : ""}النقر على أي كلمة يعرض مواضع جذرها في القرآن</small></h2>
     <p class="view-toggle">العرض: <button data-view="simple" class="${simple ? "on" : ""}">مبسّط</button>
       <button data-view="full" class="${simple ? "" : "on"}">كامل</button></p>
-    ${relatedHtml || `<p class="empty">لم يُعثر على آيات مرتبطة.</p>`}
+    ${aloneHtml(s, a, items)}
+    ${relatedHtml}
   `;
   document.title = `${refLabel(s, a)} · تفسير القرآن بالقرآن`;
+}
+
+// التعليل والغاية بين الآية وجارتها، من أول الآية الثانية (﴿ذلك بأنهم…﴾، لام التعليل ﴿ليجزي…﴾)
+const EXPLAINS = { cause: ["سبب ما", "﴿ذلك بأن…﴾"], purpose: ["الغاية مما", "لام التعليل"] };
+function explainsHtml(s, a) {
+  const notes = [];
+  const next = state.explains[`${s}:${a + 1}`];
+  if (next) notes.push(`<a href="#${s}:${a + 1}">الآية التالية</a> تبيّن ${EXPLAINS[next][0]} في هذه (${EXPLAINS[next][1]} في أولها).`);
+  const own = state.explains[`${s}:${a}`];
+  if (own) notes.push(`هذه الآية تبيّن ${EXPLAINS[own][0]} في <a href="#${s}:${a - 1}">الآية السابقة</a> (${EXPLAINS[own][1]} في أولها).`);
+  return notes.length ? `<p class="hint">${notes.join(" ")}</p>` : "";
+}
+
+// آية لا يشترك لفظها مع غيرها إلا في ألفاظ شائعة: بيانها الأقرب سياقها، ومعنى ألفاظها في المعجم
+function aloneHtml(s, a, items) {
+  const words = getVerse(s, a);
+  if (state.initials.has(`${s}:${a}`)) return initialsHtml(s, a);
+  if (items.length && items[0][3] !== WEAK) return "";  // الروابط الضعيفة لا تأتي إلا وحدها
+  const glossed = [...new Map(words.filter((w) => state.glosses[normalize(w[2])])
+    .map((w) => [normalize(w[2]), w])).values()];
+  const context = [-2, -1, 1, 2].filter((d) => getVerse(s, a + d)).map((d) => `<a href="#${s}:${a + d}">${refLabel(s, a + d)}</a>`);
+  return `
+    <section class="card alone">
+      <p>لا يشترك لفظ هذه الآية مع غيرها من الآيات إلا في ألفاظ شائعة، فأقرب بيانها من القرآن سياقها:
+        ${context.join("، ")}${items.length ? "، ثم الروابط الضعيفة أدناه" : ""}.</p>
+      ${glossed.map(([text, , lemma]) => {
+        const g = state.glosses[normalize(lemma)];
+        return `<p>﴿<span class="q">${escapeHtml(text)}</span>﴾ في المعجم: ${g.d.map(linkWords).join("؛ ")}</p>`;
+      }).join("")}
+      ${glossed.length ? `<p class="hint">${DICT_NOTE}</p>` : ""}
+    </section>`;
+}
+
+// الحروف المقطعة: السور التي تُفتتح بها، وما يليها من ذكر الكتاب (من النص نفسه)
+const BOOK_LEMMAS = new Set(["كتاب", "قرءان", "تنزيل", "انزل", "نزل", "ذكر", "اوحي"]);
+function initialsHtml(s, a) {
+  const isInitials = (n, a) => state.initials.has(`${n}:${a}`);
+  const groups = new Map();
+  let withBook = 0, total = 0;
+  state.surahs.forEach((surah) => {
+    // ﴿حم ۝ عسق﴾: الآية الثانية حروف مقطعة كذلك
+    const count = isInitials(surah.n, 1) ? (isInitials(surah.n, 2) ? 2 : 1) : 0;
+    if (!count) return;
+    surah.verses.slice(0, count).forEach((words, i) => {
+      const letters = words[0][0];
+      if (!groups.has(normalize(letters))) groups.set(normalize(letters), { letters, refs: [] });
+      groups.get(normalize(letters)).refs.push([surah.n, i + 1]);
+    });
+    total += 1;
+    if (surah.verses.slice(0, count + 1).flat().some((w) => BOOK_LEMMAS.has(normalize(w[2])))) withBook += 1;
+  });
+  return `
+    <section class="card alone">
+      <p>حروف مقطعة. تُفتتح بها ${T.countAr(total, "surah")}${total ? `، ويُذكر معها أو في الآية التي تليها الكتاب أو القرآن
+        أو التنزيل أو الذكر في ${withBook} منها` : ""}:</p>
+      <ul class="initials">${[...groups.values()].map(({ letters, refs }) =>
+        `<li><span class="q">${escapeHtml(letters)}</span>: ${refs.map(([rs, ra]) => rs === s && ra === a
+          ? `<strong>${refLabel(rs, ra)}</strong>` : `<a href="#${rs}:${ra}">${refLabel(rs, ra)}</a>`).join("، ")}</li>`).join("")}</ul>
+    </section>`;
 }
 
 function renderList(title, matches, opts, before = "") {
@@ -409,16 +478,24 @@ function ayahLink(i) {
   return `<a href="#${v.s}:${v.a}">${refLabel(v.s, v.a)}</a>`;
 }
 
-function renderTopics() {
+// فهرس الموضوعات مصنّفًا: صفحة «الموضوعات» وصفحة «الترتيب بالموضوع» واحدة
+function topicIndexHtml() {
+  return TOPIC_CATEGORIES.map(([title, topics]) => `
+    <section class="card"><h3>${title}</h3><div class="topics-grid">${topics.map((t) => {
+      const [label, query] = Array.isArray(t) ? t : [t, t];
+      return `<a class="topic-link" href="${topicHash(query)}">${escapeHtml(label)}</a>`;
+    }).join("")}</div></section>`).join("");
+}
+
+function renderTopics(inOrder = false) {
   app.innerHTML = `
+    ${inOrder ? orderNav("topics") : ""}
     <section class="card">
       <h2>البحث بالموضوع</h2>
       <p>يُكتب الموضوع في خانة البحث (مثل: الصلاة، الصبر، موسى، يوم القيامة) فتظهر كل الآيات التي ورد فيها،
         ومع كل آية الآيات التي تبيّنها من القرآن، وفي الأخير خلاصة الموضوع مستخرجة من ألفاظ الآيات نفسها.</p>
-      <div class="topics-grid">
-        ${SUGGESTED_TOPICS.map((t) => `<a class="topic-link" href="${topicHash(t)}">${t}</a>`).join("")}
-      </div>
-    </section>`;
+    </section>
+    ${topicIndexHtml()}`;
   document.title = "الموضوعات · تفسير القرآن بالقرآن";
 }
 
@@ -467,7 +544,8 @@ function verseIndexOf(s, a) {
 function explanationItems(v, topicSet) {
   const items = state.related[`${v.s}:${v.a}`] || [];
   const inTopic = (it) => topicSet.has(verseIndexOf(it[0], it[1]));
-  const rank = (it) => (it[3] ? 0 : inTopic(it) ? 1 : 2);
+  // الروابط الضعيفة لا تأتي إلا وحدها (لآية بلا رابط غيرها)، فلا تُقدَّم بسياقها
+  const rank = (it) => (it[3] && it[3] !== WEAK ? 0 : inTopic(it) ? 1 : 2);
   return items
     .map((it, order) => ({ it, order }))
     .sort((x, y) => rank(x.it) - rank(y.it) || x.order - y.order)
@@ -506,13 +584,15 @@ function renderTopic(arg) {
     }).join("");
     const missing = resolved.missing.length
       ? `<p>لم تُفهم من العبارة: ${resolved.missing.map((w) => `«${escapeHtml(w)}»`).join("، ")}.</p>` : "";
-    const absent = query.split(/\s+/).filter(Boolean).filter((w) => !occursInQuran(w));
+    const latin = !/[\u0600-\u06FF]/.test(query);
+    const absent = latin ? [] : query.split(/\s+/).filter(Boolean).filter((w) => !occursInQuran(w));
     const absentHtml = absent.length
       ? `<p class="absent"><strong>${absent.map((w) => `«${escapeHtml(w)}»`).join("، ")} ${absent.length > 1 ? "لا ترد" : "لا يرد"} في القرآن.</strong></p>` : "";
     app.innerHTML = `
       <section class="card">
         <h2>لم يُعثر على موضوع «${escapeHtml(query)}»</h2>
         ${absentHtml}
+        ${latin ? `<p>البحث بالحروف العربية: تُكتب الكلمة كما ترد في القرآن (الصلاة، الصبر، موسى)، أو موضع الآية (2:255).</p>` : ""}
         ${missing}
         ${sugg ? `<p>كلمات قريبة:</p><div class="topics-grid">${sugg}</div>` : ""}
         <p>${wordSearch} · <a href="#topics">الموضوعات المقترحة</a></p>
@@ -591,30 +671,7 @@ function renderTopic(arg) {
     ${summaryHtml(sum)}
   `;
 
-  let shown = 0;
-  const viewKey = location.hash;
-  state.topicMore = (focusNew) => {
-    const next = list.slice(shown, shown + TOPIC_PAGE);
-    const container = $("topic-verses");
-    container.insertAdjacentHTML("beforeend", next.map(verseCard).join(""));
-    // بعد «عرض المزيد» ينتقل التركيز إلى أول آية جديدة بدل أن يضيع
-    if (focusNew && container.children && container.children[shown]) container.children[shown].focus();
-    shown += next.length;
-    state.topicViews.set(viewKey, { shown, y: (state.topicViews.get(viewKey) || {}).y || 0 });
-    const left = list.length - shown;
-    $("topic-more").innerHTML = left > 0 ? `<button class="more" data-more>عرض المزيد (بقي ${left})</button>` : "";
-  };
-
-  // الرجوع من آية إلى الموضوع يعيد ما عُرض وموضع القراءة، أما الزيارة الجديدة فتبدأ من أوله
-  const saved = state.navigatedByLink ? null : state.topicViews.get(viewKey);
-  state.topicViews.delete(viewKey);
-  state.topicMore(false);
-  while (saved && shown < saved.shown && shown < list.length) state.topicMore(false);
-  if (saved && saved.open && document.querySelectorAll) {
-    const panels = document.querySelectorAll("#topic-verses details.explain");
-    saved.open.forEach((i) => { if (panels[i]) panels[i].open = true; });
-  }
-  if (saved && saved.y) setTimeout(() => window.scrollTo(0, saved.y), 0);
+  pagedList(list, verseCard, TOPIC_PAGE, { list: "topic-verses", more: "topic-more" });
 }
 
 // الخلاصة: كلها من ألفاظ الآيات (إحصاء وتجميع)، لا تفسير خارجي
@@ -667,6 +724,518 @@ function summaryHtml(sum) {
     </section>`;
 }
 
+// ---------- الترتيب ----------
+// بيانات web/data/order.json (tools/order.py): كلها من ألفاظ القرآن ووسومه الصرفية، بلا تفسير خارجي
+
+const ORDER_PAGE = 12;  // مقاطع في كل دفعة من «عرض المزيد»
+const VOICE_PAGE = 40;  // آيات في كل دفعة
+const ADDR_KINDS = ["نداء", "﴿قل﴾", "﴿يسألونك﴾", "دعاء"];
+const SPEAK_KINDS = ["﴿قال﴾", "بضمير المتكلم", "﴿قل﴾"];
+const ORDER_CRITERIA = [
+  ["time", "زمن الأحداث", "ما يقصّه القرآن مرتبًا من خلق السماوات والأرض إلى الساعة والآخرة، ولكل حقبة آية من القرآن تشهد لموضعها."],
+  ["stories", "القصص", "كل قصة مجموعة من مواضعها في السور، تُقرأ متتابعة، ومعها ما يقابلها من القصة نفسها في موضع آخر."],
+  ["characters", "الشخصيات", "الأنبياء والأقوام ومن ذُكر بأسمائهم: أين ذُكروا، وما قالوا، وبماذا نودوا."],
+  ["topics", "الموضوع", "فهرس الموضوعات مصنّفًا، وكل موضوع تُجمع آياته من ألفاظه في القرآن."],
+  ["addressees", "المخاطَب", "من يُخاطَب في الآية: ﴿يا أيها الذين آمنوا﴾، ﴿يا أيها الناس﴾، ﴿يا بني إسرائيل﴾، ﴿قل﴾، ﴿ربنا﴾…"],
+  ["speakers", "المتكلّم", "من يتكلم في الآية: الله بضمير المتكلم (﴿إنا أنزلناه﴾)، أو من ذُكر بعد ﴿قال﴾: موسى، فرعون، الملأ…"],
+];
+// فهرس الموضوعات: [العنوان، [[اللفظ المعروض، كلمة البحث]]]
+const TOPIC_CATEGORIES = [
+  ["الإيمان والغيب", ["الإيمان", "الملائكة", "الجن", "الشيطان", ["الوحي", "أوحى"], "الرسل", "الكتاب", "الغيب", "الروح", "القدر"]],
+  ["اليوم الآخر", ["الساعة", "البعث", "يوم القيامة", "الحساب", "الميزان", "الشفاعة", "الجنة", "النار"]],
+  ["العبادات", ["الصلاة", "الزكاة", "الصيام", "الحج", "الذكر", "الدعاء", ["التسبيح", "سبح"], ["الإنفاق", "أنفق"], ["الجهاد", "جاهد"], ["الهجرة", "هاجر"]]],
+  ["الأخلاق", ["الصبر", "الشكر", "التوبة", ["التقوى", "اتقى"], "الصدق", "العدل", "الإحسان", ["العفو", "عفا"], "التوكل", "الكبر", "الظلم", "الكذب", "الحسد", "البخل"]],
+  ["الأسرة والمجتمع", ["الوالدين", "اليتيم", "النساء", "الزوج", ["النكاح", "نكح"], "الطلاق", ["الميراث", "ورث"], "المسكين", "الفقراء"]],
+  ["المعاملات والأحكام", ["الربا", "البيع", "الكيل", "العهد", ["الأمانة", "الأمانات"], "الشهادة", "القصاص", ["السرقة", "السارق"], "القتال"]],
+  ["الكون والخلق", ["خلق الإنسان", "السماء", "الأرض", "الشمس", "القمر", "النجوم", "الجبال", "البحر", "الرياح", "الليل", "النهار", "الأنعام"]],
+  ["الهدى والضلال", ["القرآن", "الهدى", "الضلال", "الحق", "الباطل", "الكفر", ["الشرك", "أشرك"], ["النفاق", "المنافقين"], "الفتنة"]],
+  ["أشخاص", ["موسى", "إبراهيم", "عيسى", "مريم", "يوسف", "نوح", "فرعون", "إبليس"]],
+];
+
+function orderReady() {
+  if (state.order) return true;
+  app.innerHTML = `<p class="empty">بيانات الترتيب غير موجودة. يجب تشغيل <code>python3 tools/order.py</code>.</p>`;
+  return false;
+}
+
+function rangeLabel(s, a1, a2) {
+  return `${state.surahs[s - 1].name} ${a1}${a2 > a1 ? `–${a2}` : ""}`;
+}
+
+function rangeLink([s, a1, a2]) {
+  return `<a href="#${s}:${a1}">${rangeLabel(s, a1, a2)}</a>`;
+}
+
+const versesIn = (passages) => passages.reduce((n, [, a1, a2]) => n + a2 - a1 + 1, 0);
+
+function charLink(id) {
+  const c = state.orderChars.get(id);
+  return c ? `<a class="topic-link" href="#order/character/${id}">${escapeHtml(c.name)}</a>` : "";
+}
+
+// نص المقطع متصلًا، وكل آية تفتح صفحتها
+function passageText(s, a1, a2) {
+  const verses = [];
+  for (let a = a1; a <= a2; a++) {
+    verses.push(`<a class="verse-link" href="#${s}:${a}" title="${escapeHtml(refLabel(s, a))}">${verseHtml(s, a)}</a>`);
+  }
+  return `<div class="passage-text">${verses.join(" ")}</div>`;
+}
+
+// المقاطع المقابلة من القصة نفسها في سور أخرى (related.json: [11، سورة، أول آية، آخر آية])
+function parallelsOf(s, a1, a2) {
+  const found = new Map();
+  for (let a = a1; a <= a2; a++) {
+    for (const item of state.related[`${s}:${a}`] || []) {
+      const ctx = item[3];
+      if (Array.isArray(ctx) && ctx[0] === PARALLEL) found.set(ctx.join(":"), ctx.slice(1));
+    }
+  }
+  return [...found.values()].sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+}
+
+function passageCard([s, a1, a2, chars = []], { parallels = false, label = "" } = {}) {
+  const others = parallels ? parallelsOf(s, a1, a2) : [];
+  return `
+    <article class="card passage" tabindex="-1">
+      <div class="related-head">
+        <a class="ref" href="#${s}:${a1}">${rangeLabel(s, a1, a2)}</a>
+        ${label ? `<span class="chip context">${label}</span>` : ""}
+      </div>
+      ${passageText(s, a1, a2)}
+      ${chars.length ? `<div class="chips">${chars.map(charLink).join("")}</div>` : ""}
+      ${others.length ? `<p class="hint">القصة نفسها في: ${others.map(rangeLink).join(" · ")}</p>` : ""}
+    </article>`;
+}
+
+// عرض قائمة طويلة على دفعات («عرض المزيد») في صفحة الموضوع وصفحات الترتيب. الرجوع إلى الصفحة من آية
+// يعيد ما عُرض منها وما فُتح من «بيانها من القرآن» وموضع القراءة، أما الزيارة الجديدة فتبدأ من أولها
+function pagedList(items, render, size, { list = "order-list", more = "order-more" } = {}) {
+  let shown = 0;
+  const viewKey = location.hash;
+  state.pageList = list;
+  state.more = (focusNew) => {
+    const container = $(list);
+    const next = items.slice(shown, shown + size);
+    container.insertAdjacentHTML("beforeend", next.map(render).join(""));
+    // بعد «عرض المزيد» ينتقل التركيز إلى أول عنصر جديد بدل أن يضيع
+    if (focusNew && container.children && container.children[shown]) container.children[shown].focus();
+    shown += next.length;
+    state.topicViews.set(viewKey, { shown, y: (state.topicViews.get(viewKey) || {}).y || 0 });
+    const left = items.length - shown;
+    $(more).innerHTML = left > 0 ? `<button class="more" data-more>عرض المزيد (بقي ${left})</button>` : "";
+  };
+  const saved = state.navigatedByLink ? null : state.topicViews.get(viewKey);
+  state.topicViews.delete(viewKey);
+  state.more(false);
+  while (saved && shown < saved.shown && shown < items.length) state.more(false);
+  if (saved && saved.open && document.querySelectorAll) {
+    const panels = document.querySelectorAll(`#${list} details`);
+    saved.open.forEach((i) => { if (panels[i]) panels[i].open = true; });
+  }
+  if (saved && saved.y) setTimeout(() => window.scrollTo(0, saved.y), 0);
+}
+
+function orderNav(current) {
+  return `<p class="order-nav">${ORDER_CRITERIA.map(([id, title]) =>
+    `<a class="topic-link${id === current ? " on" : ""}" href="#order/${id}">${title}</a>`).join("")}</p>`;
+}
+
+function renderOrderIndex() {
+  if (!orderReady()) return;
+  app.innerHTML = `
+    <section class="card">
+      <h2>ترتيب القرآن</h2>
+      <p>هنا تُجمع آيات القرآن على غير ترتيب المصحف: بزمن الأحداث، وبالقصة، وبالشخصية، وبالموضوع، وبمن يُخاطَب
+        ومن يتكلم. والترتيب كله مستخرج من ألفاظ القرآن نفسه (أسماء الأعلام، وأدوات النداء، وأفعال القول، وأساليب
+        السرد)، بلا تفسير خارجي ولا روايات، فما لا يحدده النص يُذكر أنه لا يحدده.</p>
+    </section>
+    <div class="order-grid">
+      ${ORDER_CRITERIA.map(([id, title, text]) => `
+        <a class="card order-card" href="#order/${id}">
+          <h3>${title}</h3>
+          <p>${text}</p>
+        </a>`).join("")}
+    </div>`;
+  document.title = "ترتيب القرآن · تفسير القرآن بالقرآن";
+}
+
+// نص فيه آيات بين ﴿﴾ يُعرض بخط المصحف
+const quoted = (text) => escapeHtml(text).replace(/﴿([^﴾]*)﴾/g, '﴿<span class="q">$1</span>﴾');
+
+function evidenceHtml(evidence) {
+  return `<ul class="evidence">${evidence.map(([s, a, note]) =>
+    `<li>${quoted(note)} (<a href="#${s}:${a}">${refLabel(s, a)}</a>)</li>`).join("")}</ul>`;
+}
+
+function renderTimeline() {
+  if (!orderReady()) return;
+  const { eras, unplaced } = state.order;
+  const total = eras.reduce((n, e) => n + versesIn(e.passages), 0);
+  const eraCard = (e, i) => {
+    const long = e.passages.filter(([, a1, a2]) => a2 > a1);
+    const chars = state.order.characters.filter((c) => c.era === e.id).map((c) => c.id);
+    return `
+      <section class="card era" id="era-${e.id}" tabindex="-1">
+        <h3><span class="era-num">${i + 1}</span> ${escapeHtml(e.title)}
+          <small>${T.countAr(e.passages.length, "passage")} · ${T.countAr(versesIn(e.passages), "ayah")}</small></h3>
+        <p class="hint">الشاهد على موضعها في الترتيب:</p>
+        ${evidenceHtml(e.evidence)}
+        ${e.note ? `<p class="hint">${escapeHtml(e.note)}</p>` : ""}
+        ${chars.length ? `<div class="topics-grid">${chars.map(charLink).join("")}</div>` : ""}
+        <p class="refs">${long.slice(0, 30).map(rangeLink).join(" · ")}${long.length > 30 ? " …" : ""}</p>
+        <p><a class="read-link" href="#order/time/${e.id}">اقرأ هذه الحقبة ←</a></p>
+      </section>`;
+  };
+  app.innerHTML = `
+    ${orderNav("time")}
+    <section class="card">
+      <h2>ترتيب القرآن بزمن الأحداث <small>${eras.length} حقبة · ${T.countAr(total, "ayah")}</small></h2>
+      <p>ما يقصّه القرآن مرتبًا بزمن وقوعه، من خلق السماوات والأرض إلى الساعة والآخرة. ترتيب الحقب نفسه من القرآن:
+        لكل حقبة آية تشهد أنها بعد التي قبلها، وداخل كل حقبة تُعرض المقاطع بترتيب المصحف لأن النص لا يرتّبها.
+        والمقطع يُنسب إلى حقبة من يُذكر فيه، ويمتد ما اتصل به السرد أو الحوار.</p>
+      <p class="topics-grid">${eras.map((e, i) => `<a class="topic-link" href="#era-${e.id}" data-scroll="era-${e.id}">${i + 1}. ${escapeHtml(e.title)}</a>`).join("")}
+        <a class="topic-link" href="#era-unplaced" data-scroll="era-unplaced">قصص لا يحدد النص زمنها</a></p>
+    </section>
+    ${eras.map(eraCard).join("")}
+    <section class="card era" id="era-unplaced" tabindex="-1">
+      <h3>قصص لا يحدد النص زمنها</h3>
+      <p class="hint">${escapeHtml(unplaced.note)}</p>
+      <p class="refs">${unplaced.stories.map((u) => `${charLink(u.id)} ${u.passages.map(rangeLink).join("، ")}`).join(" · ")}</p>
+      <p><a class="read-link" href="#order/time/unplaced">اقرأها ←</a></p>
+    </section>`;
+  document.title = "زمن الأحداث · ترتيب القرآن";
+}
+
+function renderEra(id) {
+  if (!orderReady()) return;
+  const { eras, unplaced } = state.order;
+  const index = eras.findIndex((e) => e.id === id);
+  if (index < 0 && id !== "unplaced") return renderTimeline();
+  const prev = index > 0 ? eras[index - 1] : index < 0 ? eras[eras.length - 1] : null;
+  const next = index >= 0 && index + 1 < eras.length ? eras[index + 1] : null;
+  const pager = `<div class="pager">${prev ? `<a href="#order/time/${prev.id}">→ ${escapeHtml(prev.title)}</a>` : "<span></span>"}
+    ${next ? `<a href="#order/time/${next.id}">${escapeHtml(next.title)} ←</a>` : index >= 0 ? `<a href="#order/time/unplaced">قصص لا يحدد النص زمنها ←</a>` : "<span></span>"}</div>`;
+
+  let head, items, single = [];
+  if (id === "unplaced") {
+    items = unplaced.stories.flatMap((u) => u.passages.map((p) => ({ p, label: u.title })));
+    head = `<h2>قصص لا يحدد النص زمنها <small>${T.countAr(items.length, "passage")}</small></h2>
+      <p>${escapeHtml(unplaced.note)}</p>`;
+  } else {
+    const era = eras[index];
+    const stages = era.stages ? new Map(era.stages) : null;
+    // مشاهد الآخرة: المقاطع الطويلة بمراحلها، وما كان آية واحدة يُذكر في آخر كل مرحلة
+    const ordered = stages
+      ? era.stages.map(([k]) => k).flatMap((k) => era.passages.filter((p) => p[4] === k && p[2] > p[1]))
+      : era.passages;
+    if (stages) single = era.passages.filter((p) => p[2] === p[1]);
+    items = ordered.map((p) => ({ p, label: stages ? stages.get(p[4]) : "" }));
+    head = `<h2><span class="era-num">${index + 1}</span> ${escapeHtml(era.title)}
+        <small>${T.countAr(era.passages.length, "passage")} · ${T.countAr(versesIn(era.passages), "ayah")}</small></h2>
+      <p class="hint">الشاهد على موضعها في الترتيب:</p>
+      ${era.evidence.map(([s, a, note]) => `<div class="evidence-verse"><a class="ref" href="#${s}:${a}">${refLabel(s, a)}</a>
+        ${verseHtml(s, a)}<p class="hint">${quoted(note)}</p></div>`).join("")}
+      ${era.note ? `<p class="hint">${escapeHtml(era.note)}</p>` : ""}`;
+  }
+  const singles = single.length ? `
+    <details class="card explain singles"><summary>مواضع أخرى في آية واحدة (${single.length})</summary>
+      ${state.order.eras[index].stages.map(([k, title]) => {
+        const list = single.filter((p) => p[4] === k);
+        return list.length ? `<p><strong>${escapeHtml(title)}:</strong> ${list.map(rangeLink).join("، ")}</p>` : "";
+      }).join("")}
+    </details>` : "";
+  app.innerHTML = `
+    ${orderNav("time")}
+    <section class="card era-head">${head}</section>
+    ${pager}
+    <div id="order-list"></div>
+    <div id="order-more"></div>
+    ${singles}
+    ${pager}`;
+  pagedList(items, ({ p, label }) => passageCard(p, { label, parallels: true }), ORDER_PAGE);
+  document.title = `${id === "unplaced" ? "قصص لا يحدد النص زمنها" : eras[index].title} · ترتيب القرآن`;
+}
+
+// القصة: كل مقطع يُذكر فيه أحد أصحابها (لا ذكرًا عابرًا)، من الحقب كلها
+function storyPassages(story) {
+  const all = state.orderPassages;
+  const strong = new Set(story.members.flatMap((id) => (state.orderChars.get(id) || { mentions: [] }).mentions)
+    .filter((m) => !m[2]).map(([s, a]) => `${s}:${a}`));
+  return all.filter(({ p: [s, a1, a2], era }) => era !== "hour" && era !== "creation" && (() => {
+    for (let a = a1; a <= a2; a++) if (strong.has(`${s}:${a}`)) return true;
+    return false;
+  })()).map(({ p }) => p).sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+}
+
+function eraTitle(eraId) {
+  const era = state.order.eras.find((e) => e.id === eraId);
+  if (era) return `<a href="#order/time/${era.id}">${escapeHtml(era.title)}</a>`;
+  return `<a href="#order/time/unplaced">لا يحدد النص زمنها</a>`;
+}
+
+// القصص بزمن أصحابها، وما كان مقطعًا واحدًا من آية واحدة ليس قصة
+function storyList() {
+  const eraRank = new Map(state.order.eras.map((e, i) => [e.id, i]));
+  const eraOf = (story) => (state.orderChars.get(story.members[0]) || {}).era;
+  return state.order.stories
+    .map((story) => ({ story, passages: storyPassages(story) }))
+    .filter(({ passages }) => passages.some(([, a1, a2]) => a2 > a1))
+    .sort((x, y) => (eraRank.get(eraOf(x.story)) ?? 99) - (eraRank.get(eraOf(y.story)) ?? 99));
+}
+
+function renderStories() {
+  if (!orderReady()) return;
+  const stories = storyList();
+  app.innerHTML = `
+    ${orderNav("stories")}
+    <section class="card">
+      <h2>القصص <small>${stories.length} قصة</small></h2>
+      <p>كل قصة مجموعة من مواضعها في السور لتُقرأ متتابعة، مرتبة بزمن أصحابها. والقصة هنا كل مقطع يُذكر فيه صاحبها
+        أو من معه (قوم نوح في قصة نوح، وفرعون في قصة موسى) وما اتصل به من السرد والحوار، ومعه ما يقابله من القصة
+        نفسها في سورة أخرى.</p>
+    </section>
+    ${stories.map(({ story, passages }) => `
+      <a class="card story-row" href="#order/story/${story.id}">
+        <strong>${escapeHtml(story.name)}</strong>
+        <span class="hint">${T.countAr(passages.length, "passage")} · ${T.countAr(versesIn(passages), "ayah")} ·
+          في ${T.countAr(new Set(passages.map((p) => p[0])).size, "surah")}</span>
+      </a>`).join("")}`;
+  document.title = "القصص · ترتيب القرآن";
+}
+
+function renderStory(id) {
+  if (!orderReady()) return;
+  // رابط قديم بمعرّف شخصية (﴿فرعون﴾) يفتح قصتها (موسى)
+  const c = state.orderChars.get(id);
+  const story = state.order.stories.find((x) => x.id === id) || (c && state.order.stories.find((x) => x.id === c.story));
+  if (!story) return renderStories();
+  const passages = storyPassages(story);
+  const lead = state.orderChars.get(story.members[0]);
+  const inPassage = (s, a) => passages.some(([ps, a1, a2]) => ps === s && a >= a1 && a <= a2);
+  const others = story.members.flatMap((m) => (state.orderChars.get(m) || { mentions: [] }).mentions)
+    .filter(([s, a]) => !inPassage(s, a))
+    .sort((x, y) => x[0] - y[0] || x[1] - y[1])
+    .filter(([s, a], k, list) => !k || list[k - 1][0] !== s || list[k - 1][1] !== a);
+  const people = story.members.filter((m) => state.orderChars.has(m));
+  app.innerHTML = `
+    ${orderNav("stories")}
+    <section class="card">
+      <h2>${escapeHtml(story.name)} <small>القصة في ${T.countAr(passages.length, "passage")} · ${T.countAr(versesIn(passages), "ayah")}</small></h2>
+      <p>الحقبة: ${lead ? eraTitle(lead.era) : ""}</p>
+      ${people.length > 1 || people[0] ? `<div class="topics-grid">${people.map(charLink).join("")}</div>` : ""}
+      <p class="refs">${passages.map(rangeLink).join(" · ")}</p>
+    </section>
+    <div id="order-list"></div>
+    <div id="order-more"></div>
+    ${others.length ? `<section class="card"><h3>ويُذكرون خارج هذه المقاطع في</h3>
+      <p class="refs">${others.map(([s, a, ref]) => `<a href="#${s}:${a}">${refLabel(s, a)}</a>${ref ? " (ذكر عابر)" : ""}`).join("، ")}</p></section>` : ""}`;
+  pagedList(passages, (p) => passageCard(p, { parallels: true }), ORDER_PAGE);
+  document.title = `${story.name} · القصص · ترتيب القرآن`;
+}
+
+function renderCharacters() {
+  if (!orderReady()) return;
+  const eraRank = new Map(state.order.eras.map((e, i) => [e.id, i]));
+  const byTime = (x, y) => (eraRank.get(x.era) ?? 99) - (eraRank.get(y.era) ?? 99);
+  app.innerHTML = `
+    ${orderNav("characters")}
+    <section class="card">
+      <h2>الشخصيات <small>${state.order.characters.length}</small></h2>
+      <p>من ذُكر في القرآن باسمه أو بما يقوم مقام اسمه (﴿ذا النون﴾، ﴿امرأة العزيز﴾، ﴿أصحاب الكهف﴾)، مرتبين بزمنهم،
+        والعدد عدد الآيات التي يُذكرون فيها.</p>
+    </section>
+    ${state.order.groups.map((group) => {
+      const list = state.order.characters.filter((c) => c.group === group).sort(byTime);
+      return `<section class="card"><h3>${escapeHtml(group)}</h3><div class="topics-grid">${list.map((c) =>
+        `<a class="topic-link" href="#order/character/${c.id}">${escapeHtml(c.name)} <small>${c.mentions.length}</small></a>`).join("")}</div></section>`;
+    }).join("")}`;
+  document.title = "الشخصيات · ترتيب القرآن";
+}
+
+function voiceCard([s, a, kind], kinds) {
+  return `
+    <article class="card related" data-href="#${s}:${a}" tabindex="-1">
+      <div class="related-head"><a class="ref" href="#${s}:${a}">${refLabel(s, a)}</a>
+        <span class="chip context">${kinds[kind]}</span></div>
+      ${verseHtml(s, a)}
+    </article>`;
+}
+
+// أول آيات المتكلم أو المخاطَب في صفحة الشخصية، والبقية في صفحته (لمحمد ﷺ وحده نحو 600 آية)
+const VOICE_PREVIEW = 6;
+function voicePreview(title, note, verses, kinds, href) {
+  if (!verses.length) return "";
+  const more = verses.length > VOICE_PREVIEW
+    ? `<p><a class="read-link" href="${href}">كلها (${T.countAr(verses.length, "ayah")}) ←</a></p>` : "";
+  return `<h2>${title} <small>${note ? `${note} · ` : ""}${T.countAr(verses.length, "ayah")}</small></h2>
+    ${verses.slice(0, VOICE_PREVIEW).map((v) => voiceCard(v, kinds)).join("")}${more}`;
+}
+
+function renderCharacter(id) {
+  if (!orderReady()) return;
+  const c = state.orderChars.get(id);
+  if (!c) return renderCharacters();
+  // محمد ﷺ في جدولَي المتكلم والمخاطَب باسم «النبي ﷺ» (معرّف prophet)
+  const voiceId = VOICE_OF_CHAR[id] || id;
+  const said = (state.order.speakers.find((x) => x.id === voiceId) || { verses: [] }).verses;
+  const called = (state.order.addressees.find((x) => x.id === voiceId) || { verses: [] }).verses;
+  const story = state.order.stories.find((x) => x.id === c.story);
+  const passages = story ? storyPassages(story) : [];
+  const bySurah = new Map();
+  c.mentions.forEach(([s, a, ref]) => {
+    if (!bySurah.has(s)) bySurah.set(s, []);
+    bySurah.get(s).push(`<a href="#${s}:${a}"${ref ? ' class="ref-mention" title="ذكر عابر"' : ""}>${a}</a>`);
+  });
+  app.innerHTML = `
+    ${orderNav("characters")}
+    <section class="card">
+      <h2>${escapeHtml(c.name)} <small>${escapeHtml(c.group)}</small></h2>
+      <p>الحقبة: ${eraTitle(c.era)}</p>
+      <p>يُذكر في ${T.countAr(c.mentions.length, "ayah")}${said.length ? ` · يتكلم في ${T.countAr(said.length, "ayah")}` : ""}${called.length
+        ? ` · يُنادى في ${T.countAr(called.length, "ayah")}` : ""}${passages.length
+        ? ` · القصة: <a href="#order/story/${story.id}">${escapeHtml(story.name)}</a> (${T.countAr(passages.length, "passage")})` : ""}</p>
+      <h3>مواضع ذكره</h3>
+      <p class="refs">${[...bySurah.entries()].map(([s, links]) => `${state.surahs[s - 1].name}: ${links.join("، ")}`).join(" · ")}</p>
+      <p class="hint">الرقم الباهت ذكرٌ عابر (﴿من بعد قوم نوح﴾، ﴿ملة إبراهيم﴾).</p>
+    </section>
+    ${voicePreview("ما قاله", "بعد ﴿قال﴾ وفاعله مذكور", said, SPEAK_KINDS, `#order/speaker/${voiceId}`)}
+    ${voicePreview("ما نودي به", "", called, ADDR_KINDS, `#order/addressee/${voiceId}`)}`;
+  document.title = `${c.name} · ترتيب القرآن`;
+}
+
+const VOICE_OF_CHAR = { muhammad: "prophet" };
+const VOICES = {
+  addressees: { one: "addressee", title: "المخاطَب", kinds: ADDR_KINDS, table: "addressees",
+    intro: `من يُخاطَب في الآية، من أداة النداء وما يليها (﴿يا أيها الذين آمنوا﴾، ﴿يا قوم﴾، ﴿يا موسى﴾)، ومن الدعاء
+      (﴿ربنا﴾، ﴿رب﴾، ﴿اللهم﴾)، ومن الأمر ﴿قل﴾ والسؤال ﴿يسألونك﴾ في خطاب النبي ﷺ.` },
+  speakers: { one: "speaker", title: "المتكلّم", kinds: SPEAK_KINDS, table: "speakers",
+    intro: `من يتكلم في الآية: الله حين يتكلم بضمير المتكلم (﴿إنا أنزلناه﴾، ﴿وقلنا﴾، ﴿عبادي﴾)، ومن ذُكر فاعلًا بعد
+      ﴿قال﴾ (﴿قال موسى﴾، ﴿وقال الذين كفروا﴾، ﴿قالت نملة﴾)، والنبي ﷺ فيما أُمر أن يقوله (﴿قل﴾). ولا يُنسب قول
+      لم يُذكر قائله.` },
+};
+
+function renderVoices(key) {
+  if (!orderReady()) return;
+  const v = VOICES[key];
+  const rows = state.order[v.table];
+  app.innerHTML = `
+    ${orderNav(key)}
+    <section class="card">
+      <h2>${v.title} <small>${rows.length}</small></h2>
+      <p>${v.intro}</p>
+      <div class="topics-grid">${rows.map((r) =>
+        `<a class="topic-link" href="#order/${v.one}/${r.id}">${escapeHtml(r.name)} <small>${r.verses.length}</small></a>`).join("")}</div>
+    </section>`;
+  document.title = `${v.title} · ترتيب القرآن`;
+}
+
+function renderVoice(key, arg) {
+  if (!orderReady()) return;
+  const v = VOICES[key];
+  const [id, kindRaw] = arg.split("|");
+  const row = state.order[v.table].find((r) => r.id === id);
+  if (!row) return renderVoices(key);
+  const kind = kindRaw === undefined ? null : +kindRaw;
+  const counts = v.kinds.map((_, k) => row.verses.filter((x) => x[2] === k).length);
+  const list = kind === null ? row.verses : row.verses.filter((x) => x[2] === kind);
+  const filters = counts.filter(Boolean).length > 1 ? `<p class="topics-grid">
+      <a class="topic-link${kind === null ? " on" : ""}" href="#order/${v.one}/${id}">الكل <small>${row.verses.length}</small></a>
+      ${v.kinds.map((label, k) => counts[k] ? `<a class="topic-link${kind === k ? " on" : ""}" href="#order/${v.one}/${id}|${k}">${label} <small>${counts[k]}</small></a>` : "").join("")}</p>` : "";
+  const charId = Object.keys(VOICE_OF_CHAR).find((c) => VOICE_OF_CHAR[c] === id) || id;
+  const isChar = state.orderChars.has(charId);
+  app.innerHTML = `
+    ${orderNav(key)}
+    <section class="card">
+      <h2>${v.title}: ${escapeHtml(row.name)} <small>${T.countAr(row.verses.length, "ayah")}</small></h2>
+      ${filters}
+      ${isChar ? `<p><a href="#order/character/${charId}">${escapeHtml(state.orderChars.get(charId).name)} في القرآن</a></p>` : ""}
+    </section>
+    <div id="order-list"></div>
+    <div id="order-more"></div>`;
+  if (list.length) pagedList(list, (x) => voiceCard(x, v.kinds), VOICE_PAGE);
+  else $("order-list").innerHTML = `<p class="empty">لا توجد آيات من هذا النوع.</p>`;
+  document.title = `${v.title}: ${row.name} · ترتيب القرآن`;
+}
+
+function renderOrder(path) {
+  const [what, arg] = [path.split("/")[0], path.split("/").slice(1).join("/")];
+  if (!what) return renderOrderIndex();
+  if (what === "time") return arg ? renderEra(arg) : renderTimeline();
+  if (what === "stories") return renderStories();
+  if (what === "story") return renderStory(arg);
+  if (what === "characters") return renderCharacters();
+  if (what === "character") return renderCharacter(arg);
+  if (what === "topics") return renderTopics(true);
+  if (what === "addressees" || what === "speakers") return renderVoices(what);
+  if (what === "addressee") return renderVoice("addressees", arg);
+  if (what === "speaker") return renderVoice("speakers", arg);
+  return renderOrderIndex();
+}
+
+// الآية في الترتيب: حقبتها وقصتها، ومن يتكلم فيها ومن يُخاطَب
+function verseOrderHtml(s, a) {
+  if (!state.order) return "";
+  const key = `${s}:${a}`;
+  const parts = [];
+  const place = state.orderEraOf.get(key);
+  if (place) {
+    const { era, passage, story } = place;
+    const title = era.id === "unplaced" ? "قصص لا يحدد النص زمنها" : era.title;
+    if (story) parts.push(`القصة: <a href="#order/story/${story.id}">${escapeHtml(story.name)}</a> (${rangeLink(passage)})`);
+    parts.push(`الزمن: <a href="#order/time/${era.id}">${escapeHtml(title)}</a>`);
+  }
+  const voice = (map, label, one) => {
+    const ids = map.get(key);
+    if (ids) parts.push(`${label}: ${ids.map((id) => `<a href="#order/${one}/${id}">${escapeHtml(state.orderNames.get(id))}</a>`).join("، ")}`);
+  };
+  voice(state.orderSpeakers, "المتكلّم", "speaker");
+  voice(state.orderAddressees, "المخاطَب", "addressee");
+  return parts.length ? `<p class="hint verse-order">${parts.join(" · ")}</p>` : "";
+}
+
+function indexOrder(order) {
+  state.order = order;
+  // مقاطع الحقب كلها مرة واحدة: تبحث فيها كل قصة عن مقاطعها
+  state.orderPassages = [...order.eras.flatMap((e) => e.passages.map((p) => ({ p, era: e.id }))),
+    ...order.unplaced.stories.flatMap((u) => u.passages.map((p) => ({ p, era: "u:" + u.id })))];
+  order.characters.forEach((c) => state.orderChars.set(c.id, c));
+  // قصة المقطع: القصة التي يُذكر أصحابها في أكثر آياته
+  const storyOf = new Map();
+  order.stories.forEach((story) => story.members.forEach((id) => {
+    (state.orderChars.get(id) || { mentions: [] }).mentions.forEach(([s, a, ref]) => {
+      if (ref) return;
+      const k = `${s}:${a}`;
+      if (!storyOf.has(k)) storyOf.set(k, new Set());
+      storyOf.get(k).add(story);
+    });
+  }));
+  const mark = (era, passage) => {
+    const [s, a1, a2] = passage;
+    let story = null;
+    if (era.id !== "hour" && era.id !== "creation") {
+      const votes = new Map();
+      for (let a = a1; a <= a2; a++) (storyOf.get(`${s}:${a}`) || []).forEach((x) => votes.set(x, (votes.get(x) || 0) + 1));
+      story = [...votes.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] || null;
+    }
+    for (let a = a1; a <= a2; a++) {
+      if (!state.orderEraOf.has(`${s}:${a}`)) state.orderEraOf.set(`${s}:${a}`, { era, passage, story });
+    }
+  };
+  order.eras.forEach((e) => e.passages.forEach((p) => mark(e, p)));
+  order.unplaced.stories.forEach((u) => u.passages.forEach((p) => mark({ id: "unplaced", title: "" }, p)));
+  for (const [table, map] of [["speakers", state.orderSpeakers], ["addressees", state.orderAddressees]]) {
+    order[table].forEach((r) => {
+      state.orderNames.set(r.id, r.name);
+      r.verses.forEach(([s, a]) => {
+        const key = `${s}:${a}`;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(r.id);
+      });
+    });
+  }
+}
+
 // ---------- التنقل ----------
 
 function route() {
@@ -677,15 +1246,34 @@ function route() {
     // «%» غير مرمّزة في العنوان: نستعمله كما هو
   }
   window.scrollTo(0, 0);
+  state.more = null;  // «عرض المزيد» للصفحة التي تُعرض الآن وحدها
+  state.pageList = null;
   // ينتهي أثر النقر بعد هذا العرض: التنقل التالي بالرجوع أو التقدّم في المتصفح
   setTimeout(() => { state.navigatedByLink = false; }, 0);
   if (hash.startsWith("root/")) return renderRoot(hash.slice(5));
   if (hash.startsWith("search/")) return renderSearch(hash.slice(7));
   if (hash.startsWith("topic/")) return renderTopic(hash.slice(6));
   if (hash === "topics") return renderTopics();
+  if (hash === "order" || hash.startsWith("order/")) return renderOrder(hash.slice(6));
   const m = hash.match(/^(\d+):(\d+)$/);
   if (m) return renderVerse(+m[1], +m[2]);
   renderVerse(1, 1);
+}
+
+// «2:255»، «٢:٢٥٥»، «البقرة 255»، «سورة يس»: الانتقال إلى الآية بدل البحث
+function verseQuery(query) {
+  const q = query.replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).trim();
+  const num = q.match(/^(\d{1,3})\s*[:：\-–\s]\s*(\d{1,3})$/);
+  if (num) return `${+num[1]}:${+num[2]}`;  // وإن لم توجد الآية: «الآية غير موجودة»
+  const byNumber = q.match(/^سور[ةه]\s+(\d{1,3})(?:\s*[:：]?\s*(\d{1,3}))?$/);  // «سورة 2»، «سورة 2 255»
+  if (byNumber) return `${+byNumber[1]}:${byNumber[2] ? +byNumber[2] : 1}`;
+  const named = q.match(/^(سور[ةه]\s+)?(.+?)(?:\s*[:：]?\s*(\d{1,3}))?$/);
+  if (!named || (!named[1] && !named[3])) return null;  // «البقرة» وحدها موضوع
+  const name = normalize(named[2]);
+  const surah = state.surahs.find((x) => normalize(x.name) === name);
+  if (!surah) return null;
+  const a = named[3] ? +named[3] : 1;
+  return `${surah.n}:${a}`;  // وإن لم توجد الآية: «الآية غير موجودة» كما في «2:999»
 }
 
 function setupControls() {
@@ -715,12 +1303,12 @@ function setupControls() {
     const q = $("search").value.replace(/[|,%#]/g, " ").trim();
     if (!q) return;
     const root = q.match(/^جذر\s*[:：]\s*(.+)$/);
-    location.hash = root ? `root/${root[1].replace(/\s+/g, "")}` : topicHash(q);
+    location.hash = root ? `root/${root[1].replace(/\s+/g, "")}` : verseQuery(q) || topicHash(q);
   });
 
   // النقر على كلمة يفتح مواضع جذرها، والنقر على بطاقة يفتح الآية
   const activate = (e) => {
-    if (e.target.closest("[data-more]")) { if (state.topicMore) state.topicMore(true); return; }
+    if (e.target.closest("[data-more]")) { if (state.more) state.more(true); return; }
     const view = e.target.closest("[data-view]");
     if (view) { store("quran-view", view.dataset.view); route(); return; }
     const labBtn = e.target.closest("[data-lab]");
@@ -740,7 +1328,8 @@ function setupControls() {
       e.preventDefault();
       const target = $(scroll.dataset.scroll);
       const header = document.querySelector("header.top");
-      if (header) target.style.scrollMarginTop = `${header.offsetHeight + 12}px`;
+      const sticky = header && window.getComputedStyle && getComputedStyle(header).position === "sticky";
+      target.style.scrollMarginTop = sticky ? `${header.offsetHeight + 12}px` : "12px";
       target.scrollIntoView({ behavior: "smooth" });
       target.focus({ preventScroll: true });
       return;
@@ -769,7 +1358,7 @@ function setupControls() {
     const view = state.topicViews.get(old);
     if (view) {
       view.y = state.lastScrollY;
-      view.open = [...document.querySelectorAll("#topic-verses details.explain")]
+      view.open = [...document.querySelectorAll(`#${state.pageList || "topic-verses"} details`)]
         .reduce((open, d, i) => (d.open ? open.concat(i) : open), []);
     }
     route();
@@ -795,18 +1384,23 @@ function buildIndexes() {
 
 async function init() {
   try {
-    const [quran, related, glosses, rootSenses] = await Promise.all([
+    const [quran, related, glosses, rootSenses, order] = await Promise.all([
       fetch("data/quran.json").then((r) => r.json()),
       fetch("data/related.json").then((r) => r.json()),
       // معاني الألفاظ (tools/dictionary.py) اختيارية: يعمل التطبيق بدونها
       fetch("data/glosses.json").then((r) => r.json()).catch(() => ({})),
       fetch("data/root_senses.json").then((r) => r.json()).catch(() => ({})),
+      // الترتيب (tools/order.py) اختياري كذلك
+      fetch("data/order.json").then((r) => r.json()).catch(() => null),
     ]);
     state.surahs = quran.surahs;
     state.related = related;
     state.glosses = glosses;
     state.rootSenses = rootSenses;
     state.waqf = quran.waqf || {};
+    state.explains = quran.explains || {};
+    state.initials = new Set(quran.initials || []);
+    if (order) indexOrder(order);
     state.topicIndex = T.buildIndex(quran);
     state.topicIndex.verses.forEach((v, i) => state.verseIndex.set(`${v.s}:${v.a}`, i));
     buildIndexes();

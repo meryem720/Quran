@@ -164,7 +164,8 @@
   const NOUNS = {
     ayah: { one: "آية واحدة", two: ["آيتين", "آيتان"], plural: "آيات", single: "آية" },
     surah: { one: "سورة واحدة", two: ["سورتين", "سورتان"], plural: "سور", single: "سورة" },
-    axis: { one: "محور واحد", two: ["محورين", "محوران"], plural: "محاور", single: "محورًا" },
+    axis: { one: "محور واحد", two: ["محورين", "محوران"], plural: "محاور", single: "محورًا", gen: "محور" },
+    passage: { one: "مقطع واحد", two: ["مقطعين", "مقطعان"], plural: "مقاطع", single: "مقطعًا", gen: "مقطع" },
   };
 
   function countAr(n, kind, kase = "gen") {
@@ -173,7 +174,7 @@
     if (n === 2) return f.two[kase === "nom" ? 1 : 0];
     const r = n % 100;
     if (r >= 3 && r <= 10) return `${n} ${f.plural}`;
-    return `${n} ${kind === "axis" && (r === 0 || r === 1 || r === 2) ? "محور" : f.single}`;
+    return `${n} ${f.gen && (r === 0 || r === 1 || r === 2) ? f.gen : f.single}`;
   }
 
   // ---------- الفهرس ----------

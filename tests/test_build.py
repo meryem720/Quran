@@ -80,6 +80,26 @@ class PipelineTest(unittest.TestCase):
         self.assertNotIn(i[(2, 4)], links.get(i[(2, 3)], {}))
         self.assertNotIn(i[(56, 12)], links.get(i[(56, 11)], {}))
 
+    def test_cause_and_purpose_are_shown_not_ranked(self):
+        # ﴿ذلك بأن الله نزّل الكتاب بالحق﴾ تعلّل ما قبلها، و﴿ليجزي الذين آمنوا﴾ غايته: يُعرضان في صفحة
+        # الآية (quran.json) ولا يدخلان في ترتيب الروابط
+        explains = build.build_quran(self.verses)["explains"]
+        self.assertEqual(explains["2:176"], "cause")
+        self.assertEqual(explains["30:45"], "purpose")
+        self.assertEqual(explains["3:141"], "purpose")  # ﴿وليمحص الله الذين آمنوا﴾: واو ثم لام التعليل
+        self.assertNotIn("53:30", explains)  # ﴿ذلك مبلغهم من العلم﴾ ليست تعليلًا
+        self.assertTrue(self.verses[self.index[(30, 45)]]["purpose"])
+        self.assertIsNone(self.verses[self.index[(30, 45)]]["start"])
+        links = build.context_links(self.verses)
+        self.assertNotIn(self.index[(2, 176)], links.get(self.index[(2, 175)], {}))
+
+    def test_initials_link_same_letters(self):
+        # ﴿الم﴾ في أول البقرة وآل عمران والعنكبوت والروم ولقمان والسجدة
+        links = build.context_links(self.verses)
+        i = self.index
+        self.assertEqual(links[i[(2, 1)]][i[(3, 1)]], build.CONTEXT_INITIALS)
+        self.assertNotIn(i[(40, 1)], links[i[(2, 1)]])
+
     def test_proper_names_are_features(self):
         # «إبراهيم» لا جذر له في البيانات، ويُحسب لمّةً: ﴿مقام إبراهيم﴾
         feats = build.root_features(self.verses[self.index[(3, 97)]])
@@ -180,7 +200,7 @@ class ClauseTest(unittest.TestCase):
         self.assertNotIn("L:عذاب", fasila)
 
     def test_clause_explanations(self):
-        _, idf = build.root_similarity(self.verses)
+        _, idf, _ = build.root_similarity(self.verses)
         by_clause, formulas = build.clause_similarity(self.verses, self.clauses, idf)
         i = self.index
         # ﴿من ذا الذي يشفع عنده إلا بإذنه﴾ ← ﴿ولا تنفع الشفاعة عنده إلا لمن أذن له﴾ (سبأ 23)

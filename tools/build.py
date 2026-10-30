@@ -143,6 +143,25 @@ def _start_kind(segments):
     return None
 
 
+def _cause(first, second):
+    """﴿ذلك بأن…﴾، ﴿ذلكم بما…﴾: أول الآية اسم الإشارة ﴿ذلك﴾ وفي أول الثانية باء الجر سابقةً
+    (لا ﴿ذلك مبلغهم﴾ ولا ﴿ذلك بعيد﴾، فالباء فيهما من أصل الكلمة)."""
+    stems = [tags for _, tags in first if "PREF" not in tags]
+    return (bool(stems) and "DEM" in stems[0] and "LEM:ذا" in stems[0]
+            and any("DIST" in tags for _, tags in first)
+            and bool(second) and "PREF" in second[0][1] and "LEM:ب" in second[0][1])
+
+
+def _purpose(segments):
+    """لام التعليل في أول الآية ثم فعل، ولو بعد واو أو فاء: ﴿ليجزي الذين آمنوا﴾، ﴿وليمحص الله الذين
+    آمنوا﴾ غاية ما قبلها."""
+    prefixes = [tags for _, tags in segments if "PREF" in tags]
+    stems = [(pos, tags) for pos, tags in segments if "PREF" not in tags and "SUFF" not in tags]
+    k = next((k for k, tags in enumerate(prefixes) if "PRP" in tags), None)
+    return bool(k is not None and all("LEM:و" in tags or "LEM:ف" in tags for tags in prefixes[:k])
+                and stems and stems[0][0] == "V")
+
+
 def _fa_past_third(segments):
     if len(segments) < 2 or "LEM:ف" not in segments[0][1] or "PREF" not in segments[0][1]:
         return False
@@ -150,11 +169,19 @@ def _fa_past_third(segments):
     return pos == "V" and "PERF" in tags and any(t.startswith("3") for t in tags)
 
 
-def parse_morphology(path):
-    """يرجع قائمة الآيات مرتبة: كل آية فيها كلماتها مع الجذر واللمّة."""
+_PERSON = re.compile(r"[123][MF]?[SDP]")
+WORD_KEYS = ("text", "root", "lemma", "name", "verb", "conj", "initials")
+# أجزاء الكلمة لمن يحتاجها (tools/order.py): أصل الكلمة (نوعه، وسومه، لمّته، جذره، ضميره)، وسوابقها
+# (لمّاتها موحّدة)، وضمائرها المتصلة، وهل فيها أداة نداء
+DETAIL_KEYS = ("pos", "tags", "stem_lemma", "stem_root", "person", "pre", "suf", "voc")
+
+
+def parse_morphology(path, detail=False):
+    """يرجع قائمة الآيات مرتبة: كل آية فيها كلماتها مع الجذر واللمّة (ومع أجزائها إن طُلبت detail)."""
     verses = {}
     questions = set()  # الآيات التي فيها أداة استفهام
     first_word = defaultdict(list)  # (سورة، آية) -> أجزاء الكلمة الأولى [(نوعها، وسومها)]
+    second_word = defaultdict(list)
     third_person = set()  # آيات فيها ضمير غائب متصل
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -167,12 +194,18 @@ def parse_morphology(path):
                 questions.add((s, a))
             if w == 1:
                 first_word[(s, a)].append((pos_tag, tags.split("|")))
+            elif w == 2:
+                second_word[(s, a)].append((pos_tag, tags.split("|")))
             parts_ = tags.split("|")
             if pos_tag == "N" and "PRON" in parts_ and "SUFF" in parts_ and any(t.startswith("3") for t in parts_):
                 third_person.add((s, a))
             words = verses.setdefault((s, a), {})
             word = words.setdefault(w, {"text": "", "root": None, "lemma": None, "name": False, "verb": False,
-                                        "conj": False})
+                                        "conj": False, "initials": False, "pos": None, "tags": set(),
+                                        "stem_lemma": "", "stem_root": "", "person": "", "pre": [], "suf": [],
+                                        "voc": False})
+            if "INL" in tags.split("|"):
+                word["initials"] = True  # الحروف المقطعة: ﴿الم﴾، ﴿حم﴾
             word["text"] += form
             parts = tags.split("|")
             if _seg == 1 and "PREF" in parts and ("LEM:و" in parts or "LEM:ف" in parts):
@@ -181,6 +214,16 @@ def parse_morphology(path):
                 word["name"] = True  # اسم علم: موسى، فرعون، مكة…
             root = next((t[5:] for t in parts if t.startswith("ROOT:")), None)
             lemma = next((t[4:] for t in parts if t.startswith("LEM:")), None)
+            if detail:
+                person = next((t for t in parts if _PERSON.fullmatch(t)), "")
+                if "PREF" in parts:
+                    word["pre"].append(normalize(lemma or ""))
+                    word["voc"] = word["voc"] or "VOC" in parts
+                elif "SUFF" in parts:
+                    word["suf"].append(person)
+                elif word["pos"] is None:
+                    word.update(pos=pos_tag, tags=set(parts), stem_lemma=lemma or "", stem_root=root or "",
+                                person=person)
             if root:
                 # الجزء الذي يحمل الجذر هو أصل الكلمة
                 word["root"], word["lemma"] = root, lemma
@@ -195,10 +238,12 @@ def parse_morphology(path):
             "a": a,
             "question": (s, a) in questions,
             "start": _start_kind(first_word[(s, a)]),
+            "purpose": _purpose(first_word[(s, a)]),
+            "cause": _cause(first_word[(s, a)], second_word[(s, a)]),
             # قصّ متتابع: فاء ثم فعل ماضٍ لغائب، وفي الآية ضمير غائب (﴿قالت نملة… ۝ فتبسم ضاحكا من قولها﴾)
             "narrative": (s, a) in third_person and _fa_past_third(first_word[(s, a)]),
             "words": [
-                {k: words[w][k] for k in ("text", "root", "lemma", "name", "verb", "conj")}
+                {k: words[w][k] for k in (WORD_KEYS + DETAIL_KEYS if detail else WORD_KEYS)}
                 for w in sorted(words)
             ],
         })
@@ -222,8 +267,15 @@ def root_features(verse):
     return feats
 
 
+def tfidf_vector(feats, idf):
+    """متجه TF-IDF موحّد الطول لسمات آية (root_features)."""
+    vec = {k: (1 + math.log(tf)) * idf[k] for k, tf in feats.items()}
+    norm = math.sqrt(sum(x * x for x in vec.values())) or 1.0
+    return {k: x / norm for k, x in vec.items()}
+
+
 def root_similarity(verses):
-    """تشابه جيب التمام بين متجهات TF-IDF للجذور واللمّات."""
+    """تشابه جيب التمام بين متجهات TF-IDF للجذور واللمّات: (التشابه، idf، المتجهات)."""
     n = len(verses)
     feats = [root_features(v) for v in verses]
     df = defaultdict(int)
@@ -231,12 +283,7 @@ def root_similarity(verses):
         for k in f:
             df[k] += 1
     idf = {k: math.log(n / d) for k, d in df.items()}
-
-    vectors = []
-    for f in feats:
-        vec = {k: (1 + math.log(tf)) * idf[k] for k, tf in f.items()}
-        norm = math.sqrt(sum(x * x for x in vec.values())) or 1.0
-        vectors.append({k: x / norm for k, x in vec.items()})
+    vectors = [tfidf_vector(f, idf) for f in feats]
 
     postings = defaultdict(list)
     for i, vec in enumerate(vectors):
@@ -254,7 +301,7 @@ def root_similarity(verses):
                 if j != i:
                     acc[j] += x * y
         scores.append(acc)
-    return scores, idf
+    return scores, idf, vectors
 
 
 # ---------- المؤشر 1أ: البيان جملةً جملة ----------
@@ -314,9 +361,7 @@ def clause_similarity(verses, clauses, idf):
             # ﴿قل العفو﴾: لفظ واحد ذو معنى بعد «قال» الشائعة، لا يكفي لمقارنة الجملة وحدها
             if sum(1 for k in feats if k.startswith("L:") and idf[k] >= MIN_CLAUSE_IDF) < CLAUSE_MIN_WORDS:
                 continue
-            vec = {k: (1 + math.log(tf)) * idf[k] for k, tf in feats.items()}
-            norm = math.sqrt(sum(x * x for x in vec.values())) or 1.0
-            units.append((i, c, {k: x / norm for k, x in vec.items()}))
+            units.append((i, c, tfidf_vector(feats, idf)))
 
     postings = defaultdict(list)
     for u, (i, c, vec) in enumerate(units):
@@ -550,6 +595,10 @@ CONTEXT_DIALOGUE = 4  # سؤال قصير يُجاب عنه في الآية ال
 CONTEXT_ANSWER_ELSEWHERE = 5  # العبارة نفسها سُئل عنها في موضع آخر وأُجيب
 # كلام متصل: الآية الثانية تبدأ بما لا يُبتدأ به (انظر _start_kind)
 CONTEXT_CONTINUATION = {"illa": 6, "gen": 7, "yawm": 8, "ulaika": 9, "idha": 10, "bala": 12, "faman": 13}
+# التعليل (﴿ذلك بأنهم…﴾) والغاية (لام التعليل: ﴿ليجزي الذين آمنوا﴾) في أول الآية يبيّنان ما قبلها، لكن
+# إدخالهما في ترتيب الروابط أخّر أمثلة صحيحة (الإضافية 0.33 ← 0.32)، فيُعرضان في صفحة الآية وحدهما
+# (quran.json: "explains") ولا يدخلان في الحساب
+
 # ﴿خير/شر من ذلك(م)﴾ مفاضلة تشير إلى ما في الآية السابقة (آل عمران 15، المائدة 60، الحج 72)
 CONTEXT_COMPARISON = 14
 _COMPARISON = re.compile("(خير|شر)منذلك")
@@ -559,8 +608,13 @@ CONTEXT_ASKED = 15
 CONTEXT_NARRATIVE = 16
 NARRATIVE_SHARE = 0.5
 _ASKED = ("يسلونك", "ويسلونك")
+# نصيب السياق من الدرجة: القصّ المتتابع دون الجواب والكلام المتصل
+CONTEXT_SHARE = {CONTEXT_NARRATIVE: NARRATIVE_SHARE}
 ASKED_ROOT_DF = 400
 CONTEXT_PARALLEL = 11  # [11، سورة المقطع المقابل، أول آية، آخر آية]: القصة نفسها في موضع آخر
+CONTEXT_INITIALS = 17  # تُفتتح السورتان بالحروف المقطعة نفسها (﴿الم﴾، ﴿حم﴾، ﴿طسم﴾)
+CONTEXT_WEAK = 18      # آية لا يربطها بغيرها إلا ألفاظ شائعة: أقرب ما يشبهها، ويُنبَّه على ضعفه
+WEAK_COUNT = 3
 # لا يُنقل إلى المواضع الأخرى إلا جواب السؤال: أما الكلام المتصل فيصف موضعه وحده
 # (جُرّب نقله فكانت أكثر نتائجه من الفواصل المتكررة مثل ﴿على كل شيء قدير﴾)
 _ANSWER_TYPES = (CONTEXT_ADRAKA, CONTEXT_QUESTION, CONTEXT_DIALOGUE)
@@ -622,6 +676,17 @@ def context_links(verses):
     def add(i, j, reason):
         links[i][j] = reason
         links[j].setdefault(i, reason)
+
+    # السور المفتتحة بالحروف المقطعة نفسها
+    openings = defaultdict(list)
+    for i, v in enumerate(verses):
+        if v["words"] and v["words"][0]["initials"]:
+            openings[normalize(v["words"][0]["text"])].append(i)
+    for group in openings.values():
+        for x in group:
+            for y in group:
+                if x != y:
+                    links[x][y] = CONTEXT_INITIALS
 
     for i, v in enumerate(verses):
         flat = "".join(normalize(w["text"]) for w in v["words"])
@@ -812,7 +877,7 @@ def _context_reason(i, j, context, elsewhere, best_phrase, verses):
 
 
 def build_related(verses):
-    roots, idf = root_similarity(verses)
+    roots, idf, vectors = root_similarity(verses)
     clauses = load_clauses(verses)
     by_clause, formula_clauses = clause_similarity(verses, clauses, idf)
     phrases, best_phrase = phrase_similarity(verses)
@@ -891,7 +956,7 @@ def build_related(verses):
             q = root_pairs[i].get(j, 0.0) if ROOTPAIR_ADD or not (p or e) else 0.0
             c = 0.0
             if j in context.get(i, {}):
-                c = NARRATIVE_SHARE if context[i][j] == CONTEXT_NARRATIVE else 1.0
+                c = CONTEXT_SHARE.get(context[i][j], 1.0)
             if not c and j in elsewhere:
                 # بقدر تطابق العبارة مع آية السؤال
                 c = elsewhere[j][0]
@@ -943,8 +1008,33 @@ def build_related(verses):
                 items[-1].append(list(rare[i][j][1:]) if w else 0)
             if clause is not None:
                 items[-1].append(clause)
+        if not items:
+            items = weak_links(verses, i, vectors, idf)
         related[f"{v['s']}:{v['a']}"] = items
     return related
+
+
+def weak_links(verses, i, vectors, idf):
+    """آية لم يُعثر لها على رابط لأن ما يميّزها من ألفاظها نادر وغيره شائع جدًا (﴿والأرض وما طحاها﴾،
+    ﴿الله الصمد﴾): أقرب الآيات إليها بالسمات كلها ولو كانت شائعة (﴿وإذا الأرض مدت﴾)، والسياق
+    CONTEXT_WEAK ينبّه القارئ على أنه رابط ضعيف. أما الآية التي لا يشترك شيء من سماتها مع غيرها
+    (﴿ذواتا أفنان﴾، ﴿مدهامتان﴾) فتبقى بلا رابط، وتعرض الواجهة سياقها ومعنى لفظها في المعجم."""
+    mine = vectors[i]
+    if not mine:
+        return []
+    near = []
+    for j, u in enumerate(verses):
+        if j == i or abs(j - i) == 1 and u["s"] == verses[i]["s"]:
+            continue
+        score = sum(x * vectors[j].get(k, 0.0) for k, x in mine.items())
+        if score > 0:
+            near.append((score, j))
+    near.sort(key=lambda t: (-t[0], t[1]))
+    items = []
+    for score, j in near[:WEAK_COUNT]:
+        u = verses[j]
+        items.append([u["s"], u["a"], round(score * 100), CONTEXT_WEAK, "", " ".join(shared_roots(verses[i], u, idf)), ""])
+    return items
 
 
 def build_quran(verses, clauses=None):
@@ -960,6 +1050,17 @@ def build_quran(verses, clauses=None):
     # اللمّات الفعلية: تمييز الفعل من الاسم يفرّق «صَبَرَ» عن «جِنَّة» عند اتفاق الكتابة
     verbs = sorted({w["lemma"] for v in verses for w in v["words"] if w["verb"] and w["lemma"]})
     result = {"surahs": surahs, "verbs": verbs}
+    # الآية تبيّن ما قبلها: سببه (﴿ذلك بأنهم…﴾) أو غايته (﴿ليجزي…﴾)
+    explains = {}
+    for k, v in enumerate(verses):
+        if k and verses[k - 1]["s"] == v["s"]:
+            if v.get("cause"):
+                explains[f"{v['s']}:{v['a']}"] = "cause"
+            elif v.get("purpose"):
+                explains[f"{v['s']}:{v['a']}"] = "purpose"
+    result["explains"] = explains
+    # الآيات التي هي حروف مقطعة أو تبدأ بها (وسم INL في بيانات الصرف): ﴿الم﴾، ﴿حم ۝ عسق﴾، ﴿ص والقرآن﴾
+    result["initials"] = [f"{v['s']}:{v['a']}" for v in verses if v["words"] and v["words"][0]["initials"]]
     if clauses:
         # جمل الآية بحسب الوقف: "سورة:آية" -> [عدد كلمات الجمل قبل كل حدّ]، للآيات ذات أكثر من جملة
         result["waqf"] = {f"{v['s']}:{v['a']}": [end for _, end in spans[:-1]]

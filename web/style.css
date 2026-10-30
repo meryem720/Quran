@@ -306,3 +306,57 @@ button.more {
 .lab-row button[data-lab="no"].on { background: var(--chip-context); border-color: var(--muted); }
 .lab-row button[data-lab="open"].on { background: var(--chip-phrase); border-color: var(--muted); }
 .absent { color: var(--text); }
+
+/* ---------- الترتيب ---------- */
+
+.order-nav { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.topic-link.on { background: var(--accent-soft); border-color: var(--accent); }
+.order-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.order-card { display: block; color: var(--text); margin: 0; transition: border-color 0.15s; }
+.order-card:hover { border-color: var(--accent); text-decoration: none; }
+.order-card h3 { margin: 0 0 4px; color: var(--accent); font-size: 1.1rem; }
+.order-card p { margin: 0; color: var(--muted); font-size: 0.92rem; }
+.era h3, .era-head h2 { margin-top: 0; }
+.era h3 small { color: var(--muted); font-weight: normal; font-size: 0.85rem; }
+.era-num {
+  display: inline-block;
+  min-width: 1.7em;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--surface);
+  text-align: center;
+  font-size: 0.9rem;
+}
+.era { scroll-margin-top: 90px; }
+.era:focus { outline: none; }
+.evidence { margin: 4px 0 8px; padding-inline-start: 20px; }
+.evidence .q, .hint .q { font-family: var(--quran-font); font-size: 1.1em; }
+.evidence-verse { padding: 6px 12px; margin: 8px 0; border-inline-start: 3px solid var(--accent-soft); }
+.evidence-verse .quran { font-size: 1.35rem; }
+.read-link { font-weight: 600; }
+.passage:focus { outline: none; }
+.passage:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.passage-text { line-height: 2.4; }
+.verse-link { color: inherit; }
+.verse-link:hover { text-decoration: none; background: var(--accent-soft); border-radius: 6px; }
+.story-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; color: var(--text); margin-bottom: 8px; padding: 10px 16px; }
+.story-row:hover { border-color: var(--accent); text-decoration: none; }
+.ref-mention { opacity: 0.55; }
+.singles { padding: 12px 20px; }
+.verse-order { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 6px; }
+.alone p { margin: 4px 0; }
+.alone .q, .initials .q { font-family: var(--quran-font); font-size: 1.15em; }
+.initials { margin: 4px 0; padding-inline-start: 20px; }
+
+@media (max-width: 600px) {
+  /* شريط الأعلى لا يلتصق في الهاتف حتى لا يحجب نصف الشاشة */
+  .top { position: static; padding: 8px 12px; gap: 6px 12px; }
+  .top h1 { font-size: 1.1rem; }
+  .controls { gap: 6px; }
+  .controls select { flex: 1 1 7em; min-width: 0; }
+  #ayah { width: 4.2em; }
+  .nav-link { padding: 3px 10px; }
+  main { padding: 12px; }
+  .card { padding: 14px 14px; }
+}
