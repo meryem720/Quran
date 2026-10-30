@@ -69,8 +69,8 @@ def parse_words(path=build.MORPH_FILE):
         verses[(s, a)].append(word)
     # ما يبدأ به الكلام المتصل بما قبله (﴿إيلافهم﴾ بعد ﴿لإيلاف قريش﴾، ﴿إلا﴾، ﴿يوم﴾): build._start_kind
     first = {(s, a): [(pos, tags) for _, pos, tags in segs[(s, a, 1)]] for (s, a) in verses}
-    return [{"s": s, "a": a, "words": verses[(s, a)], "start": build._start_kind(first[(s, a)])}
-            for (s, a) in sorted(verses)]
+    return [{"s": s, "a": a, "words": verses[(s, a)], "start": build._start_kind(first[(s, a)]),
+             "purpose": build._purpose(first[(s, a)])} for (s, a) in sorted(verses)]
 
 
 # ---------- مطابقة العلامات ----------
@@ -569,9 +569,9 @@ def analyze(verses, debug=None):
                     chars[ident] = chars.get(ident, True) and ref
         if chars:
             mentions[key] = chars
-        # الآية التي لا يُبتدأ بها كلام تتمة لما قبلها، فهي من قصته؛ إلا ﴿يوم…﴾ ولام التعليل
-        # (﴿ليجزي الذين آمنوا﴾): ما بعدهما وعد أو وعيد لا سرد
-        kind = "narr" if v["start"] and v["start"] not in ("yawm", "purpose") else narrative_kind(v["words"])
+        # الآية التي لا يُبتدأ بها كلام تتمة لما قبلها، فهي من قصته؛ إلا ﴿يوم…﴾: ما بعده مشهد آتٍ
+        # (ولام التعليل ﴿ليجزي الذين آمنوا﴾ ليست من start: ما بعدها وعد أو وعيد لا سرد)
+        kind = "narr" if v["start"] and v["start"] != "yawm" else narrative_kind(v["words"])
         # ﴿ونفخ في الصور﴾، ﴿فإذا هم من الأجداث﴾: مشهد الساعة لا يتصل بقصة قبله وإن جاء بفعل ماضٍ
         if hour_marks.get(key) in (1, 2) and kind == "narr":
             kind = "future"
@@ -837,7 +837,7 @@ def voices(verses, in_story):
         # فعل قول فاعله غير الله قبل الموضع: ما بعده كلامه. ويمتد إلى الآية التالية إن كانت تتمة
         # لكلامه (﴿قالوا إنا أُرسلنا إلى قوم مجرمين ۝ لنرسل عليهم حجارة﴾ قول الملائكة لا قول الله)
         same_surah = k > 0 and verses[k - 1]["s"] == s
-        spoken_by_other = carried and same_surah and bool(v["start"])
+        spoken_by_other = carried and same_surah and bool(v["start"] or v["purpose"])
         for i, w in enumerate(words):
             if w["voc"]:
                 add(addressed, vocative(words, i, markers), s, a, ADDR_VOC)

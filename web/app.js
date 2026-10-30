@@ -856,9 +856,12 @@ function renderOrderIndex() {
   document.title = "ترتيب القرآن · تفسير القرآن بالقرآن";
 }
 
+// نص فيه آيات بين ﴿﴾ يُعرض بخط المصحف
+const quoted = (text) => escapeHtml(text).replace(/﴿([^﴾]*)﴾/g, '﴿<span class="q">$1</span>﴾');
+
 function evidenceHtml(evidence) {
   return `<ul class="evidence">${evidence.map(([s, a, note]) =>
-    `<li>${escapeHtml(note).replace(/﴿([^﴾]*)﴾/g, '﴿<span class="q">$1</span>﴾')} (<a href="#${s}:${a}">${refLabel(s, a)}</a>)</li>`).join("")}</ul>`;
+    `<li>${quoted(note)} (<a href="#${s}:${a}">${refLabel(s, a)}</a>)</li>`).join("")}</ul>`;
 }
 
 function renderTimeline() {
@@ -912,7 +915,7 @@ function renderEra(id) {
 
   let head, items, single = [];
   if (id === "unplaced") {
-    items = unplaced.stories.flatMap((u) => u.passages.map((p) => ({ p, label: state.orderChars.get(u.id).name })));
+    items = unplaced.stories.flatMap((u) => u.passages.map((p) => ({ p, label: u.title })));
     head = `<h2>قصص لا يحدد النص زمنها <small>${T.countAr(items.length, "passage")}</small></h2>
       <p>${escapeHtml(unplaced.note)}</p>`;
   } else {
@@ -928,7 +931,7 @@ function renderEra(id) {
         <small>${T.countAr(era.passages.length, "passage")} · ${T.countAr(versesIn(era.passages), "ayah")}</small></h2>
       <p class="hint">الشاهد على موضعها في الترتيب:</p>
       ${era.evidence.map(([s, a, note]) => `<div class="evidence-verse"><a class="ref" href="#${s}:${a}">${refLabel(s, a)}</a>
-        ${verseHtml(s, a)}<p class="hint">${escapeHtml(note).replace(/﴿([^﴾]*)﴾/g, '﴿<span class="q">$1</span>﴾')}</p></div>`).join("")}
+        ${verseHtml(s, a)}<p class="hint">${quoted(note)}</p></div>`).join("")}
       ${era.note ? `<p class="hint">${escapeHtml(era.note)}</p>` : ""}`;
   }
   const singles = single.length ? `
@@ -1060,8 +1063,10 @@ function renderCharacter(id) {
   if (!orderReady()) return;
   const c = state.orderChars.get(id);
   if (!c) return renderCharacters();
-  const said = (state.order.speakers.find((x) => x.id === id) || { verses: [] }).verses;
-  const called = (state.order.addressees.find((x) => x.id === id) || { verses: [] }).verses;
+  // محمد ﷺ في جدولَي المتكلم والمخاطَب باسم «النبي ﷺ» (معرّف prophet)
+  const voiceId = VOICE_OF_CHAR[id] || id;
+  const said = (state.order.speakers.find((x) => x.id === voiceId) || { verses: [] }).verses;
+  const called = (state.order.addressees.find((x) => x.id === voiceId) || { verses: [] }).verses;
   const story = state.order.stories.find((x) => x.id === c.story);
   const passages = story ? storyPassages(story) : [];
   const bySurah = new Map();
@@ -1102,6 +1107,7 @@ function renderTopicIndex() {
   document.title = "الموضوعات · ترتيب القرآن";
 }
 
+const VOICE_OF_CHAR = { muhammad: "prophet" };
 const VOICES = {
   addressees: { one: "addressee", title: "المخاطَب", kinds: ADDR_KINDS, table: "addressees",
     intro: `من يُخاطَب في الآية، من أداة النداء وما يليها (﴿يا أيها الذين آمنوا﴾، ﴿يا قوم﴾، ﴿يا موسى﴾)، ومن الدعاء
@@ -1139,13 +1145,14 @@ function renderVoice(key, arg) {
   const filters = counts.filter(Boolean).length > 1 ? `<p class="topics-grid">
       <a class="topic-link${kind === null ? " on" : ""}" href="#order/${v.one}/${id}">الكل <small>${row.verses.length}</small></a>
       ${v.kinds.map((label, k) => counts[k] ? `<a class="topic-link${kind === k ? " on" : ""}" href="#order/${v.one}/${id}|${k}">${label} <small>${counts[k]}</small></a>` : "").join("")}</p>` : "";
-  const isChar = state.orderChars.has(id);
+  const charId = Object.keys(VOICE_OF_CHAR).find((c) => VOICE_OF_CHAR[c] === id) || id;
+  const isChar = state.orderChars.has(charId);
   app.innerHTML = `
     ${orderNav(key)}
     <section class="card">
       <h2>${v.title}: ${escapeHtml(row.name)} <small>${T.countAr(row.verses.length, "ayah")}</small></h2>
       ${filters}
-      ${isChar ? `<p><a href="#order/character/${id}">${escapeHtml(row.name)} في القرآن</a></p>` : ""}
+      ${isChar ? `<p><a href="#order/character/${charId}">${escapeHtml(state.orderChars.get(charId).name)} في القرآن</a></p>` : ""}
     </section>
     <div id="order-list"></div>
     <div id="order-more"></div>`;
@@ -1256,6 +1263,8 @@ function verseQuery(query) {
   const q = query.replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).trim();
   const num = q.match(/^(\d{1,3})\s*[:：\-–\s]\s*(\d{1,3})$/);
   if (num) return `${+num[1]}:${+num[2]}`;  // وإن لم توجد الآية: «الآية غير موجودة»
+  const byNumber = q.match(/^سورة\s+(\d{1,3})(?:\s*[:：]?\s*(\d{1,3}))?$/);  // «سورة 2»، «سورة 2 255»
+  if (byNumber) return `${+byNumber[1]}:${byNumber[2] ? +byNumber[2] : 1}`;
   const named = q.match(/^(سورة\s+)?(.+?)(?:\s*[:：]?\s*(\d{1,3}))?$/);
   if (!named || (!named[1] && !named[3])) return null;  // «البقرة» وحدها موضوع
   const name = normalize(named[2]).replace(/^سوره/, "");

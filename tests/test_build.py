@@ -86,7 +86,8 @@ class PipelineTest(unittest.TestCase):
         explains = build.build_quran(self.verses)["explains"]
         self.assertEqual(explains["2:176"], "cause")
         self.assertEqual(explains["30:45"], "purpose")
-        self.assertEqual(self.verses[self.index[(30, 45)]]["start"], "purpose")
+        self.assertTrue(self.verses[self.index[(30, 45)]]["purpose"])
+        self.assertIsNone(self.verses[self.index[(30, 45)]]["start"])
         links = build.context_links(self.verses)
         self.assertNotIn(self.index[(2, 176)], links.get(self.index[(2, 175)], {}))
 
@@ -197,7 +198,7 @@ class ClauseTest(unittest.TestCase):
         self.assertNotIn("L:عذاب", fasila)
 
     def test_clause_explanations(self):
-        _, idf = build.root_similarity(self.verses)
+        _, idf, _ = build.root_similarity(self.verses)
         by_clause, formulas = build.clause_similarity(self.verses, self.clauses, idf)
         i = self.index
         # ﴿من ذا الذي يشفع عنده إلا بإذنه﴾ ← ﴿ولا تنفع الشفاعة عنده إلا لمن أذن له﴾ (سبأ 23)

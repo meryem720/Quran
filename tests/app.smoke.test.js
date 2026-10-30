@@ -71,6 +71,8 @@ for (const [name, hash, expect] of [
   ["قصة يوسف", "#order/story/yusuf", "يوسف 4–"],
   ["الشخصيات", "#order/characters", "أقوام وجماعات"],
   ["شخصية موسى", "#order/character/musa", "ما قاله"],
+  ["محمد ﷺ: ما قاله وما نودي به", "#order/character/muhammad", "ما نودي به"],
+  ["المخاطَب: النبي ﷺ يفتح شخصيته", "#order/addressee/prophet", "#order/character/muhammad"],
   ["الترتيب بالموضوع", "#order/topics", "اليوم الآخر"],
   ["المخاطَبون", "#order/addressees", "الذين آمنوا"],
   ["المخاطَب: الذين آمنوا", "#order/addressee/believers", "نداء"],
