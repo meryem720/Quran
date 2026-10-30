@@ -73,6 +73,7 @@ for (const [name, hash, expect] of [
   ["شخصية موسى", "#order/character/musa", "ما قاله"],
   ["محمد ﷺ: ما قاله وما نودي به", "#order/character/muhammad", "ما نودي به"],
   ["المخاطَب: النبي ﷺ يفتح شخصيته", "#order/addressee/prophet", "#order/character/muhammad"],
+  ["صفحة الشخصية تختصر الآيات الكثيرة", "#order/character/muhammad", "#order/speaker/prophet"],
   ["الترتيب بالموضوع", "#order/topics", "اليوم الآخر"],
   ["المخاطَبون", "#order/addressees", "الذين آمنوا"],
   ["المخاطَب: الذين آمنوا", "#order/addressee/believers", "نداء"],

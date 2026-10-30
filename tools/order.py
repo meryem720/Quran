@@ -31,46 +31,19 @@ import build  # noqa: E402
 
 OUT_FILE = os.path.join(build.OUT_DIR, "order.json")
 norm = build.normalize
-_PERSON = re.compile(r"[123][MF]?[SDP]")
 
 
 # ---------- قراءة الكلمات بأجزائها ----------
 
 def parse_words(path=build.MORPH_FILE):
-    """الآيات مرتبة، وكل كلمة: نصها موحّدًا (nt)، ولمّة أصلها موحّدة (lem)، ووسومه، وضميره،
-    وسوابقها (pre) وضمائرها المتصلة (suf)، وهل فيها أداة نداء (voc)."""
-    segs = defaultdict(list)
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            loc, form, pos, tags = line.split("\t")
-            s, a, w, _ = (int(x) for x in loc.split(":"))
-            segs[(s, a, w)].append((form, pos, tags.split("|")))
-    verses = defaultdict(list)
-    for (s, a, w) in sorted(segs):
-        word = {"text": "", "lem": "", "raw": "", "root": "", "pn": False, "pos": "", "tags": set(), "pre": [], "suf": [],
-                "voc": False}
-        for form, pos, tags in segs[(s, a, w)]:
-            word["text"] += form
-            lemma = next((t[4:] for t in tags if t.startswith("LEM:")), "")
-            person = next((t for t in tags if _PERSON.fullmatch(t)), "")
-            if "PREF" in tags:
-                word["pre"].append(norm(lemma))
-                word["voc"] = word["voc"] or "VOC" in tags
-            elif "SUFF" in tags:
-                word["suf"].append(person)
-            elif not word["pos"]:
-                word.update(lem=norm(lemma), raw=lemma, pos=pos, tags=set(tags), pn="PN" in tags, person=person,
-                            root=next((t[5:] for t in tags if t.startswith("ROOT:")), ""))
-        word["nt"] = norm(word["text"])
-        word.setdefault("person", "")
-        verses[(s, a)].append(word)
-    # ما يبدأ به الكلام المتصل بما قبله (﴿إيلافهم﴾ بعد ﴿لإيلاف قريش﴾، ﴿إلا﴾، ﴿يوم﴾): build._start_kind
-    first = {(s, a): [(pos, tags) for _, pos, tags in segs[(s, a, 1)]] for (s, a) in verses}
-    return [{"s": s, "a": a, "words": verses[(s, a)], "start": build._start_kind(first[(s, a)]),
-             "purpose": build._purpose(first[(s, a)])} for (s, a) in sorted(verses)]
+    """الآيات مرتبة من build.parse_morphology بأجزاء كلماتها، ولكل كلمة: نصها موحّدًا (nt)، ولمّة أصلها
+    (raw) وموحّدةً (lem)، وجذر أصلها، وهل هو اسم علم (pn)."""
+    verses = build.parse_morphology(path, detail=True)
+    for v in verses:
+        for w in v["words"]:
+            w.update(nt=norm(w["text"]), raw=w["stem_lemma"], lem=norm(w["stem_lemma"]), root=w["stem_root"],
+                     pn="PN" in w["tags"])
+    return verses
 
 
 # ---------- مطابقة العلامات ----------
@@ -569,9 +542,9 @@ def analyze(verses, debug=None):
                     chars[ident] = chars.get(ident, True) and ref
         if chars:
             mentions[key] = chars
-        # الآية التي لا يُبتدأ بها كلام تتمة لما قبلها، فهي من قصته؛ إلا ﴿يوم…﴾: ما بعده مشهد آتٍ
-        # (ولام التعليل ﴿ليجزي الذين آمنوا﴾ ليست من start: ما بعدها وعد أو وعيد لا سرد)
-        kind = "narr" if v["start"] and v["start"] != "yawm" else narrative_kind(v["words"])
+        # الآية التي لا يُبتدأ بها كلام تتمة لما قبلها، فهي من قصته؛ إلا ﴿يوم…﴾ و﴿إذا…﴾: ما بعدهما
+        # مشهد آتٍ (ولام التعليل ﴿ليجزي الذين آمنوا﴾ ليست من start: ما بعدها وعد أو وعيد لا سرد)
+        kind = "narr" if v["start"] and v["start"] not in ("yawm", "idha") else narrative_kind(v["words"])
         # ﴿ونفخ في الصور﴾، ﴿فإذا هم من الأجداث﴾: مشهد الساعة لا يتصل بقصة قبله وإن جاء بفعل ماضٍ
         if hour_marks.get(key) in (1, 2) and kind == "narr":
             kind = "future"
@@ -825,9 +798,13 @@ def voices(verses, in_story):
     markers = [(m, c[0]) for c in CHARACTERS for m in c[4]]
     addressed, speaking = defaultdict(list), defaultdict(list)
 
+    seen = set()  # (الجدول، المعرّف، سورة، آية): الآية تُذكر مرة واحدة لكل متكلم أو مخاطَب
+
     def add(table, ident, s, a, kind):
         ident = "prophet" if ident == "muhammad" else ident
-        if ident and not any(x[0] == s and x[1] == a for x in table[ident]):
+        key = (id(table), ident, s, a)
+        if ident and key not in seen:
+            seen.add(key)
             table[ident].append([s, a, kind])
 
     carried = False

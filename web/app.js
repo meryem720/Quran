@@ -37,11 +37,6 @@ function store(key, value) {
 }
 const viewMode = () => stored("quran-view", "full");
 const TOPIC_PAGE = 40;
-const SUGGESTED_TOPICS = [
-  "الصلاة", "الزكاة", "الصيام", "الحج", "الصبر", "التوبة", "الشكر", "الرحمة", "التقوى",
-  "الجنة", "النار", "القرآن", "اليتيم", "الربا", "الظلم",
-  "موسى", "إبراهيم", "عيسى", "مريم", "يوسف", "نوح", "فرعون", "إبليس",
-];
 const T = window.QuranTopic;
 
 const state = {
@@ -66,6 +61,7 @@ const state = {
   orderSpeakers: new Map(),   // "s:a" -> [معرّفات المتكلمين]
   orderAddressees: new Map(), // "s:a" -> [معرّفات المخاطَبين]
   orderNames: new Map(),      // معرّف -> اسم المتكلم أو المخاطَب
+  orderPassages: [],          // [{p: [سورة، أول، آخر، شخصيات…], era}] لكل مقاطع الحقب
   lastScrollY: 0,
   navigatedByLink: false, // التنقل الحالي بنقر رابط (لا برجوع المتصفح)
 };
@@ -114,9 +110,8 @@ function verseHtml(s, a, { clickable = false, highlightRoot = null, highlightRoo
   return `<span class="quran">${parts.join(" ")} <span class="ayah-num">﴿${a}﴾</span></span>`;
 }
 
-function passageLink([, s, a1, a2]) {
-  return `<a href="#${s}:${a1}">${state.surahs[s - 1].name} ${a1}–${a2}</a>`;
-}
+// [11، سورة، أول آية، آخر آية]: المقطع المقابل من القصة نفسها
+const passageLink = ([, s, a1, a2]) => rangeLink([s, a1, a2]);
 
 // سبب الرابط بين آيتين: عنصر من related.json
 // [سورة، آية، الدرجة، السياق، العبارة المشتركة، الجذور المشتركة، التعبير المشترك، [اللفظ النادر، عدد آياته]]
@@ -259,7 +254,7 @@ function explainsHtml(s, a) {
 function aloneHtml(s, a, items) {
   const words = getVerse(s, a);
   if (state.initials.has(`${s}:${a}`)) return initialsHtml(s, a);
-  if (items.some((it) => it[3] !== WEAK)) return "";
+  if (items.length && items[0][3] !== WEAK) return "";  // الروابط الضعيفة لا تأتي إلا وحدها
   const glossed = [...new Map(words.filter((w) => state.glosses[normalize(w[2])])
     .map((w) => [normalize(w[2]), w])).values()];
   const context = [-2, -1, 1, 2].filter((d) => getVerse(s, a + d)).map((d) => `<a href="#${s}:${a + d}">${refLabel(s, a + d)}</a>`);
@@ -483,16 +478,24 @@ function ayahLink(i) {
   return `<a href="#${v.s}:${v.a}">${refLabel(v.s, v.a)}</a>`;
 }
 
-function renderTopics() {
+// فهرس الموضوعات مصنّفًا: صفحة «الموضوعات» وصفحة «الترتيب بالموضوع» واحدة
+function topicIndexHtml() {
+  return TOPIC_CATEGORIES.map(([title, topics]) => `
+    <section class="card"><h3>${title}</h3><div class="topics-grid">${topics.map((t) => {
+      const [label, query] = Array.isArray(t) ? t : [t, t];
+      return `<a class="topic-link" href="${topicHash(query)}">${escapeHtml(label)}</a>`;
+    }).join("")}</div></section>`).join("");
+}
+
+function renderTopics(inOrder = false) {
   app.innerHTML = `
+    ${inOrder ? orderNav("topics") : ""}
     <section class="card">
       <h2>البحث بالموضوع</h2>
       <p>يُكتب الموضوع في خانة البحث (مثل: الصلاة، الصبر، موسى، يوم القيامة) فتظهر كل الآيات التي ورد فيها،
         ومع كل آية الآيات التي تبيّنها من القرآن، وفي الأخير خلاصة الموضوع مستخرجة من ألفاظ الآيات نفسها.</p>
-      <div class="topics-grid">
-        ${SUGGESTED_TOPICS.map((t) => `<a class="topic-link" href="${topicHash(t)}">${t}</a>`).join("")}
-      </div>
-    </section>`;
+    </section>
+    ${topicIndexHtml()}`;
   document.title = "الموضوعات · تفسير القرآن بالقرآن";
 }
 
@@ -541,7 +544,8 @@ function verseIndexOf(s, a) {
 function explanationItems(v, topicSet) {
   const items = state.related[`${v.s}:${v.a}`] || [];
   const inTopic = (it) => topicSet.has(verseIndexOf(it[0], it[1]));
-  const rank = (it) => (it[3] && it[3] !== WEAK ? 0 : inTopic(it) ? 1 : it[3] === WEAK ? 3 : 2);
+  // الروابط الضعيفة لا تأتي إلا وحدها (لآية بلا رابط غيرها)، فلا تُقدَّم بسياقها
+  const rank = (it) => (it[3] && it[3] !== WEAK ? 0 : inTopic(it) ? 1 : 2);
   return items
     .map((it, order) => ({ it, order }))
     .sort((x, y) => rank(x.it) - rank(y.it) || x.order - y.order)
@@ -745,6 +749,7 @@ const TOPIC_CATEGORIES = [
   ["المعاملات والأحكام", ["الربا", "البيع", "الكيل", "العهد", ["الأمانة", "الأمانات"], "الشهادة", "القصاص", ["السرقة", "السارق"], "القتال"]],
   ["الكون والخلق", ["خلق الإنسان", "السماء", "الأرض", "الشمس", "القمر", "النجوم", "الجبال", "البحر", "الرياح", "الليل", "النهار", "الأنعام"]],
   ["الهدى والضلال", ["القرآن", "الهدى", "الضلال", "الحق", "الباطل", "الكفر", ["الشرك", "أشرك"], ["النفاق", "المنافقين"], "الفتنة"]],
+  ["أشخاص", ["موسى", "إبراهيم", "عيسى", "مريم", "يوسف", "نوح", "فرعون", "إبليس"]],
 ];
 
 function orderReady() {
@@ -955,8 +960,7 @@ function renderEra(id) {
 
 // القصة: كل مقطع يُذكر فيه أحد أصحابها (لا ذكرًا عابرًا)، من الحقب كلها
 function storyPassages(story) {
-  const all = [...state.order.eras.flatMap((e) => e.passages.map((p) => ({ p, era: e.id }))),
-    ...state.order.unplaced.stories.flatMap((u) => u.passages.map((p) => ({ p, era: "u:" + u.id })))];
+  const all = state.orderPassages;
   const strong = new Set(story.members.flatMap((id) => (state.orderChars.get(id) || { mentions: [] }).mentions)
     .filter((m) => !m[2]).map(([s, a]) => `${s}:${a}`));
   return all.filter(({ p: [s, a1, a2], era }) => era !== "hour" && era !== "creation" && (() => {
@@ -1059,6 +1063,16 @@ function voiceCard([s, a, kind], kinds) {
     </article>`;
 }
 
+// أول آيات المتكلم أو المخاطَب في صفحة الشخصية، والبقية في صفحته (لمحمد ﷺ وحده نحو 600 آية)
+const VOICE_PREVIEW = 6;
+function voicePreview(title, note, verses, kinds, href) {
+  if (!verses.length) return "";
+  const more = verses.length > VOICE_PREVIEW
+    ? `<p><a class="read-link" href="${href}">كلها (${T.countAr(verses.length, "ayah")}) ←</a></p>` : "";
+  return `<h2>${title} <small>${note ? `${note} · ` : ""}${T.countAr(verses.length, "ayah")}</small></h2>
+    ${verses.slice(0, VOICE_PREVIEW).map((v) => voiceCard(v, kinds)).join("")}${more}`;
+}
+
 function renderCharacter(id) {
   if (!orderReady()) return;
   const c = state.orderChars.get(id);
@@ -1086,25 +1100,9 @@ function renderCharacter(id) {
       <p class="refs">${[...bySurah.entries()].map(([s, links]) => `${state.surahs[s - 1].name}: ${links.join("، ")}`).join(" · ")}</p>
       <p class="hint">الرقم الباهت ذكرٌ عابر (﴿من بعد قوم نوح﴾، ﴿ملة إبراهيم﴾).</p>
     </section>
-    ${said.length ? `<h2>ما قاله <small>بعد ﴿قال﴾ وفاعله مذكور</small></h2>${said.map((v) => voiceCard(v, SPEAK_KINDS)).join("")}` : ""}
-    ${called.length ? `<h2>ما نودي به</h2>${called.map((v) => voiceCard(v, ADDR_KINDS)).join("")}` : ""}`;
+    ${voicePreview("ما قاله", "بعد ﴿قال﴾ وفاعله مذكور", said, SPEAK_KINDS, `#order/speaker/${voiceId}`)}
+    ${voicePreview("ما نودي به", "", called, ADDR_KINDS, `#order/addressee/${voiceId}`)}`;
   document.title = `${c.name} · ترتيب القرآن`;
-}
-
-function renderTopicIndex() {
-  app.innerHTML = `
-    ${orderNav("topics")}
-    <section class="card">
-      <h2>الترتيب بالموضوع</h2>
-      <p>كل موضوع تُجمع آياته من ألفاظه في القرآن، ومعه الآيات التي تبيّنه وخلاصة مستخرجة من ألفاظ آياته.
-        ويمكن البحث عن أي موضوع آخر من خانة البحث.</p>
-    </section>
-    ${TOPIC_CATEGORIES.map(([title, topics]) => `
-      <section class="card"><h3>${title}</h3><div class="topics-grid">${topics.map((t) => {
-        const [label, query] = Array.isArray(t) ? t : [t, t];
-        return `<a class="topic-link" href="${topicHash(query)}">${escapeHtml(label)}</a>`;
-      }).join("")}</div></section>`).join("")}`;
-  document.title = "الموضوعات · ترتيب القرآن";
 }
 
 const VOICE_OF_CHAR = { muhammad: "prophet" };
@@ -1169,7 +1167,7 @@ function renderOrder(path) {
   if (what === "story") return renderStory(arg);
   if (what === "characters") return renderCharacters();
   if (what === "character") return renderCharacter(arg);
-  if (what === "topics") return renderTopicIndex();
+  if (what === "topics") return renderTopics(true);
   if (what === "addressees" || what === "speakers") return renderVoices(what);
   if (what === "addressee") return renderVoice("addressees", arg);
   if (what === "speaker") return renderVoice("speakers", arg);
@@ -1199,6 +1197,9 @@ function verseOrderHtml(s, a) {
 
 function indexOrder(order) {
   state.order = order;
+  // مقاطع الحقب كلها مرة واحدة: تبحث فيها كل قصة عن مقاطعها
+  state.orderPassages = [...order.eras.flatMap((e) => e.passages.map((p) => ({ p, era: e.id }))),
+    ...order.unplaced.stories.flatMap((u) => u.passages.map((p) => ({ p, era: "u:" + u.id })))];
   order.characters.forEach((c) => state.orderChars.set(c.id, c));
   // قصة المقطع: القصة التي يُذكر أصحابها في أكثر آياته
   const storyOf = new Map();
@@ -1246,6 +1247,8 @@ function route() {
     // «%» غير مرمّزة في العنوان: نستعمله كما هو
   }
   window.scrollTo(0, 0);
+  state.more = null;  // «عرض المزيد» للصفحة التي تُعرض الآن وحدها
+  state.pageList = null;
   // ينتهي أثر النقر بعد هذا العرض: التنقل التالي بالرجوع أو التقدّم في المتصفح
   setTimeout(() => { state.navigatedByLink = false; }, 0);
   if (hash.startsWith("root/")) return renderRoot(hash.slice(5));
@@ -1263,11 +1266,11 @@ function verseQuery(query) {
   const q = query.replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).trim();
   const num = q.match(/^(\d{1,3})\s*[:：\-–\s]\s*(\d{1,3})$/);
   if (num) return `${+num[1]}:${+num[2]}`;  // وإن لم توجد الآية: «الآية غير موجودة»
-  const byNumber = q.match(/^سورة\s+(\d{1,3})(?:\s*[:：]?\s*(\d{1,3}))?$/);  // «سورة 2»، «سورة 2 255»
+  const byNumber = q.match(/^سور[ةه]\s+(\d{1,3})(?:\s*[:：]?\s*(\d{1,3}))?$/);  // «سورة 2»، «سورة 2 255»
   if (byNumber) return `${+byNumber[1]}:${byNumber[2] ? +byNumber[2] : 1}`;
-  const named = q.match(/^(سورة\s+)?(.+?)(?:\s*[:：]?\s*(\d{1,3}))?$/);
+  const named = q.match(/^(سور[ةه]\s+)?(.+?)(?:\s*[:：]?\s*(\d{1,3}))?$/);
   if (!named || (!named[1] && !named[3])) return null;  // «البقرة» وحدها موضوع
-  const name = normalize(named[2]).replace(/^سوره/, "");
+  const name = normalize(named[2]);
   const surah = state.surahs.find((x) => normalize(x.name) === name);
   if (!surah) return null;
   const a = named[3] ? +named[3] : 1;

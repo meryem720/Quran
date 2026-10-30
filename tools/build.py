@@ -157,8 +157,15 @@ def _fa_past_third(segments):
     return pos == "V" and "PERF" in tags and any(t.startswith("3") for t in tags)
 
 
-def parse_morphology(path):
-    """يرجع قائمة الآيات مرتبة: كل آية فيها كلماتها مع الجذر واللمّة."""
+_PERSON = re.compile(r"[123][MF]?[SDP]")
+WORD_KEYS = ("text", "root", "lemma", "name", "verb", "conj", "initials")
+# أجزاء الكلمة لمن يحتاجها (tools/order.py): أصل الكلمة (نوعه، وسومه، لمّته، جذره، ضميره)، وسوابقها
+# (لمّاتها موحّدة)، وضمائرها المتصلة، وهل فيها أداة نداء
+DETAIL_KEYS = ("pos", "tags", "stem_lemma", "stem_root", "person", "pre", "suf", "voc")
+
+
+def parse_morphology(path, detail=False):
+    """يرجع قائمة الآيات مرتبة: كل آية فيها كلماتها مع الجذر واللمّة (ومع أجزائها إن طُلبت detail)."""
     verses = {}
     questions = set()  # الآيات التي فيها أداة استفهام
     first_word = defaultdict(list)  # (سورة، آية) -> أجزاء الكلمة الأولى [(نوعها، وسومها)]
@@ -179,7 +186,9 @@ def parse_morphology(path):
                 third_person.add((s, a))
             words = verses.setdefault((s, a), {})
             word = words.setdefault(w, {"text": "", "root": None, "lemma": None, "name": False, "verb": False,
-                                        "conj": False, "initials": False})
+                                        "conj": False, "initials": False, "pos": None, "tags": set(),
+                                        "stem_lemma": "", "stem_root": "", "person": "", "pre": [], "suf": [],
+                                        "voc": False})
             if "INL" in tags.split("|"):
                 word["initials"] = True  # الحروف المقطعة: ﴿الم﴾، ﴿حم﴾
             word["text"] += form
@@ -190,6 +199,14 @@ def parse_morphology(path):
                 word["name"] = True  # اسم علم: موسى، فرعون، مكة…
             root = next((t[5:] for t in parts if t.startswith("ROOT:")), None)
             lemma = next((t[4:] for t in parts if t.startswith("LEM:")), None)
+            person = next((t for t in parts if _PERSON.fullmatch(t)), "")
+            if "PREF" in parts:
+                word["pre"].append(normalize(lemma or ""))
+                word["voc"] = word["voc"] or "VOC" in parts
+            elif "SUFF" in parts:
+                word["suf"].append(person)
+            elif word["pos"] is None:
+                word.update(pos=pos_tag, tags=set(parts), stem_lemma=lemma or "", stem_root=root or "", person=person)
             if root:
                 # الجزء الذي يحمل الجذر هو أصل الكلمة
                 word["root"], word["lemma"] = root, lemma
@@ -208,7 +225,7 @@ def parse_morphology(path):
             # قصّ متتابع: فاء ثم فعل ماضٍ لغائب، وفي الآية ضمير غائب (﴿قالت نملة… ۝ فتبسم ضاحكا من قولها﴾)
             "narrative": (s, a) in third_person and _fa_past_third(first_word[(s, a)]),
             "words": [
-                {k: words[w][k] for k in ("text", "root", "lemma", "name", "verb", "conj", "initials")}
+                {k: words[w][k] for k in (WORD_KEYS + DETAIL_KEYS if detail else WORD_KEYS)}
                 for w in sorted(words)
             ],
         })
