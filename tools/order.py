@@ -246,6 +246,40 @@ CHARACTERS = [
     ("malik", "مالك خازن النار", UNSEEN, "hour", [("@مالك",)]),
 ]
 CHAR_BY_ID = {c[0]: c for c in CHARACTERS}
+# القصص: صاحب القصة ومن يُذكر فيها معه، فلا تتكرر قصة نوح باسم «قوم نوح» ولا قصة موسى باسم «فرعون»
+STORIES = [
+    ("adam", "آدم وإبليس", ["adam", "iblis"]),
+    ("nuh", "نوح وقومه", ["nuh", "qawm_nuh", "nuh_wife"]),
+    ("hud", "هود وعاد", ["hud", "aad"]),
+    ("salih", "صالح وثمود", ["salih", "thamud"]),
+    ("ibrahim", "إبراهيم", ["ibrahim", "azar", "ismail", "ishaq"]),
+    ("lut", "لوط وقومه", ["lut", "qawm_lut", "lut_wife"]),
+    ("shuayb", "شعيب وأصحاب مدين", ["shuayb", "madyan"]),
+    ("yusuf", "يوسف ويعقوب", ["yusuf", "yaqub", "aziz_wife"]),
+    ("musa", "موسى وفرعون وبنو إسرائيل", ["musa", "harun", "firawn", "firawn_wife", "firawn_believer", "haman",
+                                         "samiri", "bani_israil"]),
+    ("qarun", "قارون", ["qarun"]),
+    ("talut", "طالوت وجالوت", ["talut", "jalut"]),
+    ("dawud", "داود", ["dawud"]),
+    ("sulayman", "سليمان", ["sulayman"]),
+    ("zakariya", "زكريا ويحيى", ["zakariya", "yahya"]),
+    ("isa", "مريم وعيسى", ["isa", "maryam", "imran", "imran_wife"]),
+    ("muhammad", "النبي محمد ﷺ", ["muhammad", "zayd", "abulahab", "quraysh", "rum"]),
+    ("ayyub", "أيوب", ["ayyub"]),
+    ("yunus", "يونس", ["yunus"]),
+    ("ilyas", "إلياس", ["ilyas"]),
+    ("idris", "إدريس", ["idris"]),
+    ("uzayr", "عزير", ["uzayr"]),
+    ("luqman", "لقمان", ["luqman"]),
+    ("dhulqarnayn", "ذو القرنين", ["dhulqarnayn", "yajuj"]),
+    ("kahf", "أصحاب الكهف", ["kahf"]),
+    ("saba", "سبأ", ["saba"]),
+    ("ukhdud", "أصحاب الأخدود", ["ukhdud"]),
+    ("fil", "أصحاب الفيل", ["fil"]),
+    ("rass", "أصحاب الرس", ["rass"]),
+    ("tubba", "قوم تبّع", ["tubba"]),
+]
+STORY_OF = {member: story for story, _, members in STORIES for member in members}
 # ما يشبه علامة شخصية وليس منها: ﴿يا بني آدم﴾ خطاب للناس، و﴿كونوا هودا أو نصارى﴾
 NOT_CHARACTER = [("~(و|ف|ل|ي)?بني", "@ادم"), ("@هود", "=او", "@نصراني")]
 # شخصيات يمتد ذكرها في حقب كثيرة أو يأتي في غير قصتها (﴿وجنود إبليس أجمعون﴾ في مشهد النار،
@@ -860,7 +894,7 @@ def build_order(verses):
         if not refs:
             continue
         characters.append({
-            "id": ident, "name": name, "group": group, "era": era or "u:" + ident,
+            "id": ident, "name": name, "group": group, "era": era or "u:" + ident, "story": STORY_OF.get(ident),
             "mentions": [[s, a, int(mentions[(s, a)][ident])] for s, a in refs],
         })
 
@@ -872,6 +906,7 @@ def build_order(verses):
         "eras": eras,
         "unplaced": {"note": UNPLACED_NOTE, "stories": unplaced},
         "groups": [PERSON, PEOPLE, UNSEEN],
+        "stories": [{"id": ident, "name": name, "members": members} for ident, name, members in STORIES],
         "characters": characters,
         "addressees": table(addressed),
         "speakers": table(speaking),

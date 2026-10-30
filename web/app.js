@@ -810,18 +810,25 @@ function passageCard([s, a1, a2, chars = []], { parallels = false, label = "" } 
 }
 
 // عرض قائمة طويلة على دفعات: كل نقرة على «عرض المزيد» تضيف دفعة
+// والرجوع إلى الصفحة من آية يعيد ما عُرض منها وموضع القراءة (كما في صفحة الموضوع)
 function pagedList(items, render, size) {
   let shown = 0;
+  const viewKey = location.hash;
   state.more = (focusNew) => {
     const container = $("order-list");
     const next = items.slice(shown, shown + size);
     container.insertAdjacentHTML("beforeend", next.map(render).join(""));
     if (focusNew && container.children && container.children[shown]) container.children[shown].focus();
     shown += next.length;
+    state.topicViews.set(viewKey, { shown, y: (state.topicViews.get(viewKey) || {}).y || 0 });
     const left = items.length - shown;
     $("order-more").innerHTML = left > 0 ? `<button class="more" data-more>عرض المزيد (بقي ${left})</button>` : "";
   };
+  const saved = state.navigatedByLink ? null : state.topicViews.get(viewKey);
+  state.topicViews.delete(viewKey);
   state.more(false);
+  while (saved && shown < saved.shown && shown < items.length) state.more(false);
+  if (saved && saved.y) setTimeout(() => window.scrollTo(0, saved.y), 0);
 }
 
 function orderNav(current) {
@@ -942,12 +949,12 @@ function renderEra(id) {
   document.title = `${id === "unplaced" ? "قصص لا يحدد النص زمنها" : eras[index].title} · ترتيب القرآن`;
 }
 
-// القصة: كل مقطع يُذكر فيه صاحبها (لا ذكرًا عابرًا)، من الحقب كلها
-function storyPassages(id) {
+// القصة: كل مقطع يُذكر فيه أحد أصحابها (لا ذكرًا عابرًا)، من الحقب كلها
+function storyPassages(story) {
   const all = [...state.order.eras.flatMap((e) => e.passages.map((p) => ({ p, era: e.id }))),
     ...state.order.unplaced.stories.flatMap((u) => u.passages.map((p) => ({ p, era: "u:" + u.id })))];
-  const c = state.orderChars.get(id);
-  const strong = new Set(c.mentions.filter((m) => !m[2]).map(([s, a]) => `${s}:${a}`));
+  const strong = new Set(story.members.flatMap((id) => (state.orderChars.get(id) || { mentions: [] }).mentions)
+    .filter((m) => !m[2]).map(([s, a]) => `${s}:${a}`));
   return all.filter(({ p: [s, a1, a2], era }) => era !== "hour" && era !== "creation" && (() => {
     for (let a = a1; a <= a2; a++) if (strong.has(`${s}:${a}`)) return true;
     return false;
@@ -960,12 +967,14 @@ function eraTitle(eraId) {
   return `<a href="#order/time/unplaced">لا يحدد النص زمنها</a>`;
 }
 
+// القصص بزمن أصحابها، وما كان مقطعًا واحدًا من آية واحدة ليس قصة
 function storyList() {
   const eraRank = new Map(state.order.eras.map((e, i) => [e.id, i]));
-  return state.order.characters
-    .map((c) => ({ c, passages: storyPassages(c.id) }))
+  const eraOf = (story) => (state.orderChars.get(story.members[0]) || {}).era;
+  return state.order.stories
+    .map((story) => ({ story, passages: storyPassages(story) }))
     .filter(({ passages }) => passages.some(([, a1, a2]) => a2 > a1))
-    .sort((x, y) => (eraRank.get(x.c.era) ?? 99) - (eraRank.get(y.c.era) ?? 99) || versesIn(y.passages) - versesIn(x.passages));
+    .sort((x, y) => (eraRank.get(eraOf(x.story)) ?? 99) - (eraRank.get(eraOf(y.story)) ?? 99));
 }
 
 function renderStories() {
@@ -976,11 +985,12 @@ function renderStories() {
     <section class="card">
       <h2>القصص <small>${stories.length} قصة</small></h2>
       <p>كل قصة مجموعة من مواضعها في السور لتُقرأ متتابعة، مرتبة بزمن أصحابها. والقصة هنا كل مقطع يُذكر فيه صاحبها
-        وما اتصل به من السرد والحوار، ومعه ما يقابله من القصة نفسها في سورة أخرى.</p>
+        أو من معه (قوم نوح في قصة نوح، وفرعون في قصة موسى) وما اتصل به من السرد والحوار، ومعه ما يقابله من القصة
+        نفسها في سورة أخرى.</p>
     </section>
-    ${stories.map(({ c, passages }) => `
-      <a class="card story-row" href="#order/story/${c.id}">
-        <strong>${escapeHtml(c.name)}</strong>
+    ${stories.map(({ story, passages }) => `
+      <a class="card story-row" href="#order/story/${story.id}">
+        <strong>${escapeHtml(story.name)}</strong>
         <span class="hint">${T.countAr(passages.length, "passage")} · ${T.countAr(versesIn(passages), "ayah")} ·
           في ${T.countAr(new Set(passages.map((p) => p[0])).size, "surah")}</span>
       </a>`).join("")}`;
@@ -989,24 +999,32 @@ function renderStories() {
 
 function renderStory(id) {
   if (!orderReady()) return;
+  // رابط قديم بمعرّف شخصية (﴿فرعون﴾) يفتح قصتها (موسى)
   const c = state.orderChars.get(id);
-  if (!c) return renderStories();
-  const passages = storyPassages(id);
+  const story = state.order.stories.find((x) => x.id === id) || (c && state.order.stories.find((x) => x.id === c.story));
+  if (!story) return renderStories();
+  const passages = storyPassages(story);
+  const lead = state.orderChars.get(story.members[0]);
   const inPassage = (s, a) => passages.some(([ps, a1, a2]) => ps === s && a >= a1 && a <= a2);
-  const others = c.mentions.filter(([s, a]) => !inPassage(s, a));
+  const others = story.members.flatMap((m) => (state.orderChars.get(m) || { mentions: [] }).mentions)
+    .filter(([s, a]) => !inPassage(s, a))
+    .sort((x, y) => x[0] - y[0] || x[1] - y[1])
+    .filter(([s, a], k, list) => !k || list[k - 1][0] !== s || list[k - 1][1] !== a);
+  const people = story.members.filter((m) => state.orderChars.has(m));
   app.innerHTML = `
     ${orderNav("stories")}
     <section class="card">
-      <h2>قصة ${escapeHtml(c.name)} <small>${T.countAr(passages.length, "passage")} · ${T.countAr(versesIn(passages), "ayah")}</small></h2>
-      <p>الحقبة: ${eraTitle(c.era)} · <a href="#order/character/${c.id}">${escapeHtml(c.name)} في القرآن</a></p>
+      <h2>قصة ${escapeHtml(story.name)} <small>${T.countAr(passages.length, "passage")} · ${T.countAr(versesIn(passages), "ayah")}</small></h2>
+      <p>الحقبة: ${lead ? eraTitle(lead.era) : ""}</p>
+      ${people.length > 1 || people[0] ? `<div class="topics-grid">${people.map(charLink).join("")}</div>` : ""}
       <p class="refs">${passages.map(rangeLink).join(" · ")}</p>
     </section>
     <div id="order-list"></div>
     <div id="order-more"></div>
-    ${others.length ? `<section class="card"><h3>ويُذكر ${escapeHtml(c.name)} خارج هذه المقاطع في</h3>
+    ${others.length ? `<section class="card"><h3>ويُذكرون خارج هذه المقاطع في</h3>
       <p class="refs">${others.map(([s, a, ref]) => `<a href="#${s}:${a}">${refLabel(s, a)}</a>${ref ? " (ذكر عابر)" : ""}`).join("، ")}</p></section>` : ""}`;
   pagedList(passages, (p) => passageCard(p, { parallels: true }), ORDER_PAGE);
-  document.title = `قصة ${c.name} · ترتيب القرآن`;
+  document.title = `قصة ${story.name} · ترتيب القرآن`;
 }
 
 function renderCharacters() {
@@ -1043,7 +1061,8 @@ function renderCharacter(id) {
   if (!c) return renderCharacters();
   const said = (state.order.speakers.find((x) => x.id === id) || { verses: [] }).verses;
   const called = (state.order.addressees.find((x) => x.id === id) || { verses: [] }).verses;
-  const passages = storyPassages(id);
+  const story = state.order.stories.find((x) => x.id === c.story);
+  const passages = story ? storyPassages(story) : [];
   const bySurah = new Map();
   c.mentions.forEach(([s, a, ref]) => {
     if (!bySurah.has(s)) bySurah.set(s, []);
@@ -1056,7 +1075,7 @@ function renderCharacter(id) {
       <p>الحقبة: ${eraTitle(c.era)}</p>
       <p>يُذكر في ${T.countAr(c.mentions.length, "ayah")}${said.length ? ` · يتكلم في ${T.countAr(said.length, "ayah")}` : ""}${called.length
         ? ` · يُنادى في ${T.countAr(called.length, "ayah")}` : ""}${passages.length
-        ? ` · <a href="#order/story/${c.id}">قصته في ${T.countAr(passages.length, "passage")}</a>` : ""}</p>
+        ? ` · <a href="#order/story/${story.id}">قصة ${escapeHtml(story.name)} في ${T.countAr(passages.length, "passage")}</a>` : ""}</p>
       <h3>مواضع ذكره</h3>
       <p class="refs">${[...bySurah.entries()].map(([s, links]) => `${state.surahs[s - 1].name}: ${links.join("، ")}`).join(" · ")}</p>
       <p class="hint">الرقم الباهت ذكرٌ عابر (﴿من بعد قوم نوح﴾، ﴿ملة إبراهيم﴾).</p>

@@ -106,6 +106,11 @@ class OrderTest(unittest.TestCase):
         self.assertNotIn((12, 85), self.voice("speakers", "god"))  # ﴿قالوا تالله﴾ قسم لا فاعل
         self.assertNotIn((15, 6), self.voice("speakers", "prophet"))  # ﴿وقالوا يا أيها الذي نزل عليه الذكر﴾
 
+    def test_every_character_in_one_story_at_most(self):
+        members = [m for _, _, ms in order.STORIES for m in ms]
+        self.assertEqual(len(members), len(set(members)))
+        self.assertTrue(set(members) <= set(order.CHAR_BY_ID))
+
     def test_json_shape(self):
         eras = [e["id"] for e in self.data["eras"]]
         self.assertEqual(eras, order.ERA_IDS)
